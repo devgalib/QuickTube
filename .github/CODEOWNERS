@@ -1,0 +1,6 @@
+# Every change needs the maintainer's review.
+* @devgalib
+
+# Release pipeline and repository settings: maintainer only.
+/.github/ @devgalib
+/app/build.gradle.kts @devgalib

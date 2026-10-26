@@ -1,0 +1,28 @@
+name: Website not supported
+description: A site's videos can't be downloaded
+labels: [site-support]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please only report sites whose content you have the right to download. Don't post links to adult or illegal content.
+        Most sites are handled by the bundled yt-dlp engine, which updates itself daily, so try again tomorrow first.
+  - type: input
+    id: site
+    attributes:
+      label: Website (domain only)
+      placeholder: example.com
+    validations: { required: true }
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where did you try?
+      options: [In-app browser, Shared a link from another app, Pasted a link]
+    validations: { required: true }
+  - type: textarea
+    id: details
+    attributes:
+      label: Technical details
+      description: From the error sheet → "Technical details" → "Copy details".
+      render: text
+    validations: { required: true }

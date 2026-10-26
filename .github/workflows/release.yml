@@ -68,9 +68,18 @@ jobs:
       - name: Verify signature and collect the APK
         id: apk
         run: |
-          src=$(ls app/build/outputs/apk/release/*.apk | head -1)
-          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort -V | tail -1)
-          "$apksigner" verify --print-certs "$src" | grep -q "Signer #1" || { echo "::error::APK is not signed"; exit 1; }
+          src=app/build/outputs/apk/release/app-release.apk
+          ls -la app/build/outputs/apk/release/
+          [ -f "$src" ] || { echo "::error::$src not found (an unsigned build would be app-release-unsigned.apk)"; exit 1; }
+          # Newest build-tools that actually ships apksigner.
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
+          [ -n "$apksigner" ] || { echo "::error::apksigner not found in $ANDROID_HOME/build-tools"; exit 1; }
+          echo "Using $apksigner"
+          if ! report=$("$apksigner" verify --verbose --print-certs "$src" 2>&1); then
+            echo "$report"; echo "::error::APK signature verification failed"; exit 1
+          fi
+          echo "$report" | grep -E "^Verifies|^Verified using|^Signer #1 certificate (DN|SHA-256)" || true
+          echo "$report" | grep -q "^Signer #1 certificate SHA-256 digest" || { echo "$report"; echo "::error::No signer found"; exit 1; }
           out="QuickTube-v${{ steps.version.outputs.name }}.apk"
           mkdir -p dist && cp "$src" "dist/$out"
           (cd dist && sha256sum "$out" > "$out.sha256")

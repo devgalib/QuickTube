@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="app/src/main/res/mipmap-xxxhdpi/ic_launcher.png" width="96" alt="QuickTube icon"/>
+<img src="docs/screenshots/banner.jpg" alt="QuickTube: search, watch and download videos and music" width="100%"/>
 
 # QuickTube
 
@@ -18,6 +18,23 @@
 > [!IMPORTANT]
 > Only download content you own or have permission to save, and respect each site's terms of service.
 > QuickTube doesn't bypass DRM and isn't affiliated with YouTube, Google or any other site.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/01_home.jpg" alt="Home: search, paste a link or share from any app"/></td>
+    <td><img src="docs/screenshots/02_formats.jpg" alt="Download sheet with video and audio formats"/></td>
+    <td><img src="docs/screenshots/03_browser.jpg" alt="Built-in browser detecting the video on a page"/></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/04_watch.jpg" alt="Video page with player, comments and related videos"/></td>
+    <td><img src="docs/screenshots/05_music.jpg" alt="Music feed with background playback mini player"/></td>
+    <td><img src="docs/screenshots/06_themes.jpg" alt="Appearance settings with accent colours"/></td>
+  </tr>
+</table>
+
+<img src="docs/screenshots/07_light.jpg" alt="QuickTube in light mode" width="100%"/>
 
 ## Install
 

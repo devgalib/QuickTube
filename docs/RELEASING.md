@@ -53,3 +53,17 @@ them to GitHub with the `gh` CLI. Nothing is printed.
 
 **Keep the keystore safe and backed up.** It's stored outside the repository. If it's lost, existing users can't update to new
 releases and would have to uninstall first.
+
+## Updating the README mockups
+
+1. On a device, turn on a clean status bar (demo mode) and capture screens with no personal content (no Library list, no private links):
+
+   ```bash
+   adb shell settings put global sysui_demo_allowed 1
+   adb shell am broadcast -a com.android.systemui.demo -e command enter
+   adb shell am broadcast -a com.android.systemui.demo -e command clock -e hhmm 1200
+   adb exec-out screencap -p > docs/screenshots/raw/home.png
+   ```
+
+2. Render the framed mockups (needs Google Chrome and ImageMagick): `python3 scripts/make_mockups.py`
+3. Turn demo mode off again: `adb shell am broadcast -a com.android.systemui.demo -e command exit`

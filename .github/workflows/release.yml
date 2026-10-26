@@ -67,6 +67,8 @@ jobs:
 
       - name: Verify signature and collect the APK
         id: apk
+        env:
+          EXPECTED_CERT_SHA256: b5fb3a7defdc7a3e0c0d6c3b468bc6353cd22225bbfee0585d7f337667aeb87a
         run: |
           src=app/build/outputs/apk/release/app-release.apk
           ls -la app/build/outputs/apk/release/
@@ -78,8 +80,13 @@ jobs:
           if ! report=$("$apksigner" verify --verbose --print-certs "$src" 2>&1); then
             echo "$report"; echo "::error::APK signature verification failed"; exit 1
           fi
-          echo "$report" | grep -E "^Verifies|^Verified using|^Signer #1 certificate (DN|SHA-256)" || true
-          echo "$report" | grep -q "^Signer #1 certificate SHA-256 digest" || { echo "$report"; echo "::error::No signer found"; exit 1; }
+          # Output differs between build-tools versions ("Signer #1 certificate …" vs "V2 Signer: certificate …").
+          digest=$(echo "$report" | grep -m1 -oE "certificate SHA-256 digest: [0-9a-f]{64}" | awk '{print $NF}')
+          echo "Signed with certificate SHA-256: ${digest:-none}"
+          # Fingerprint of the QuickTube release key (public; not a secret). Anything else is refused.
+          if [ "$digest" != "$EXPECTED_CERT_SHA256" ]; then
+            echo "$report"; echo "::error::APK is not signed with the QuickTube release key"; exit 1
+          fi
           out="QuickTube-v${{ steps.version.outputs.name }}.apk"
           mkdir -p dist && cp "$src" "dist/$out"
           (cd dist && sha256sum "$out" > "$out.sha256")

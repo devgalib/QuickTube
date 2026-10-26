@@ -1,0 +1,107 @@
+name: Mirror to GitLab
+
+# Copies every branch and tag of this repository to GitLab after each push.
+# Needs the GITLAB_TOKEN repository secret (a GitLab personal access token with the
+# write_repository scope; with the api scope it also creates the GitLab project if it is missing).
+
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  delete:
+  workflow_dispatch:
+
+concurrency:
+  group: gitlab-mirror
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Sync to GitLab
+    runs-on: ubuntu-latest
+    env:
+      GITLAB_PROJECT: coderboygalif/QuickTube
+    steps:
+      - name: Check GitLab token
+        id: token
+        env:
+          TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::warning::GITLAB_TOKEN secret is not set; skipping the GitLab mirror"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout repository
+        if: steps.token.outputs.ok == 'true'
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # all branches and tags
+
+      - name: Create the GitLab project if it does not exist
+        if: steps.token.outputs.ok == 'true'
+        env:
+          TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          VISIBILITY: ${{ github.event.repository.visibility }}
+        run: |
+          api="https://gitlab.com/api/v4"
+          enc=$(jq -rn --arg p "$GITLAB_PROJECT" '$p|@uri')
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "PRIVATE-TOKEN: $TOKEN" "$api/projects/$enc")
+          if [ "$code" = 404 ]; then
+            ns=$(jq -rn --arg p "${GITLAB_PROJECT%/*}" '$p|@uri')
+            nsid=$(curl -s -H "PRIVATE-TOKEN: $TOKEN" "$api/namespaces/$ns" | jq -r '.id // empty')
+            vis=private; [ "$VISIBILITY" = public ] && vis=public
+            if [ -n "$nsid" ] && curl -sf -o /dev/null -X POST -H "PRIVATE-TOKEN: $TOKEN" "$api/projects" \
+                --data-urlencode "name=${GITLAB_PROJECT#*/}" --data-urlencode "path=${GITLAB_PROJECT#*/}" \
+                --data "namespace_id=$nsid" --data "visibility=$vis"; then
+              echo "Created GitLab project $GITLAB_PROJECT ($vis)"
+            else
+              echo "Could not create the project through the API; the push below creates it (private)."
+            fi
+          elif [ "$code" != 200 ]; then
+            echo "GitLab API answered $code (token without api scope?); pushing anyway."
+          fi
+
+      - name: Push branches and tags to GitLab
+        if: steps.token.outputs.ok == 'true'
+        env:
+          TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          url="https://oauth2:${TOKEN}@gitlab.com/${GITLAB_PROJECT}.git"
+
+          # GitLab rejects pushes that reference missing LFS objects, so upload them first.
+          if git lfs ls-files --all 2>/dev/null | grep -q .; then
+            git lfs fetch --all origin
+            git lfs push --all "$url"
+          fi
+
+          # The checkout keeps every branch under refs/remotes/origin/*: push those as branches.
+          # (git push --mirror would also push refs/remotes/* and try to delete GitLab's default
+          # branch, which GitLab rejects, so every run failed.)
+          git update-ref -d refs/remotes/origin/HEAD 2>/dev/null || true
+          if ! git push "$url" "+refs/remotes/origin/*:refs/heads/*" "+refs/tags/*:refs/tags/*"; then
+            # Very large first pushes time out in GitLab's checks: send the history in pieces of
+            # 20 commits per branch, then push everything again.
+            echo "Full push failed; pushing the history in smaller pieces"
+            for ref in $(git for-each-ref --format='%(refname:lstrip=3)' refs/remotes/origin/); do
+              for sha in $(git rev-list --reverse --first-parent "refs/remotes/origin/$ref" | awk 'NR % 20 == 0'); do
+                git push -q "$url" "$sha:refs/heads/$ref" || echo "::warning::piece $sha of $ref failed"
+              done
+            done
+            git push "$url" "+refs/remotes/origin/*:refs/heads/*" "+refs/tags/*:refs/tags/*"
+          fi
+
+          # Keep GitLab's default branch the same as GitHub's (e.g. after master -> main), then
+          # remove branches that were deleted on GitHub. GitLab refuses to delete its default or
+          # protected branches, so that last step only warns.
+          enc=$(jq -rn --arg p "$GITLAB_PROJECT" '$p|@uri')
+          curl -s -o /dev/null -X PUT -H "PRIVATE-TOKEN: $TOKEN" \
+            "https://gitlab.com/api/v4/projects/$enc" --data "default_branch=$DEFAULT_BRANCH" || true
+          git push --prune "$url" "+refs/remotes/origin/*:refs/heads/*" "+refs/tags/*:refs/tags/*" \
+            || echo "::warning::Some branches deleted on GitHub could not be deleted on GitLab"

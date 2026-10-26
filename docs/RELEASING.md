@@ -23,6 +23,17 @@ The workflow then:
 3. builds `assembleRelease` with R8, verifies the APK signature,
 4. creates the `vX.Y.Z` tag and a GitHub Release with `QuickTube-vX.Y.Z.apk`, its `.sha256`, and notes generated from merged PRs.
 
+## Firebase
+
+Project **`quicktube-app`** (Crashlytics + Analytics), Android apps `com.edureminder.quicktube` and `com.edureminder.quicktube.qa`.
+Maintainers get the config with the Firebase CLI:
+
+```bash
+firebase apps:sdkconfig ANDROID --project quicktube-app -o app/google-services.json
+```
+
+`app/google-services.json` is git-ignored. Collection is off in debug builds and when users opt out (Settings → Privacy).
+
 ## Secrets
 
 | Secret | Purpose |

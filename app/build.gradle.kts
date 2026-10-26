@@ -39,6 +39,11 @@ android {
         versionCode = (project.findProperty("appVersionCode") as String?)?.toInt() ?: 1
         versionName = (project.findProperty("appVersionName") as String?) ?: "${project.property("appVersionBase")}.0-dev"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Where the app looks for new versions. Override with -PupdateApiUrl=… to test against a local fake release.
+        val updateUrl = (project.findProperty("updateApiUrl") as String?)
+            ?: "https://api.github.com/repos/devgalib/QuickTube/releases/latest"
+        buildConfigField("String", "UPDATE_API_URL", "\"$updateUrl\"")
+        buildConfigField("boolean", "UPDATE_URL_OVERRIDDEN", "${project.hasProperty("updateApiUrl")}")
         // Phones only (the bundled Python is per-ABI); keeps the APK small.
         ndk { abiFilters += setOf("arm64-v8a", "armeabi-v7a") }
     }
@@ -60,6 +65,8 @@ android {
             applicationIdSuffix = ".qa"
         }
     }
+    buildFeatures { buildConfig = true }
+
     packaging {
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/DEPENDENCIES")
         // yt-dlp's Python runtime is unpacked from native libs at first launch.
@@ -82,6 +89,7 @@ dependencies {
     implementation(projects.core.downloadsheet)
     implementation(projects.core.ytdlp)
     implementation(projects.core.analytics)
+    implementation(projects.core.update)
 
     implementation(projects.feature.home)
     implementation(projects.feature.search)

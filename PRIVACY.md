@@ -16,4 +16,4 @@ You can turn both off at any time in **Settings → Privacy**. Builds made from 
 ## Network requests
 
 To work, the app talks directly to the sites you use (YouTube, the pages you open in the browser, the media servers they point to)
-and to GitHub to update the yt-dlp engine. These requests go from your device to those services; they are not routed through us.
+and to GitHub to update the yt-dlp engine and to check for new app versions (this request only reveals your IP address to GitHub). These requests go from your device to those services; they are not routed through us.

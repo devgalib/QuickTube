@@ -23,6 +23,20 @@ The workflow then:
 3. builds `assembleRelease` with R8, verifies the APK signature,
 4. creates the `vX.Y.Z` tag and a GitHub Release with `QuickTube-vX.Y.Z.apk`, its `.sha256`, and notes generated from merged PRs.
 
+## How users get the update
+
+Installed apps check `api.github.com/repos/devgalib/QuickTube/releases/latest` on launch (at most every 6 hours; release
+builds only) and in Settings → Check for updates. When the tag's last number (the versionCode) is higher than theirs, they get an
+"Update available" sheet with the release notes. **Update now** downloads the APK, checks it against the `.sha256` asset and
+the installed app's signing key, then installs it with Android's PackageInstaller. Users allow "install unknown apps" for
+QuickTube once; Google Play Protect may also offer to scan the app the first time.
+
+So a release only needs: tag `v<appVersionBase>.<versionCode>`, an `*.apk` asset and its `*.apk.sha256`. The workflow does this.
+Drafts and pre-releases are never offered.
+
+Test against a fake release: build with `-PupdateApiUrl=http://localhost:8765/latest.json`, serve a release JSON plus the APK
+and checksum from that folder with `python3 -m http.server 8765`, and run `adb reverse tcp:8765 tcp:8765`.
+
 ## Firebase
 
 Project **`quicktube-app`** (Crashlytics + Analytics), Android apps `com.edureminder.quicktube` and `com.edureminder.quicktube.qa`.

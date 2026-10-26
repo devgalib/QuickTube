@@ -64,6 +64,14 @@ fun SettingsScreen(actions: SettingsActions) {
     val s by vm.settings.collectAsStateWithLifecycle()
     val trash by vm.trashCount.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val updates = org.koin.compose.koinInject<com.edureminder.quicktube.core.update.UpdateManager>()
+    val updateState by updates.state.collectAsStateWithLifecycle()
+    val updateSummary = when (updateState) {
+        is com.edureminder.quicktube.core.update.UpdateState.Checking -> "Checking…"
+        is com.edureminder.quicktube.core.update.UpdateState.UpToDate -> "You're on the latest version"
+        is com.edureminder.quicktube.core.update.UpdateState.Failed -> "Couldn't check. Tap to try again"
+        else -> "Version ${appVersion(context)}"
+    }
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding(), contentPadding = PaddingValues(bottom = 24.dp + LocalBottomBarHeight.current)) {
         item {
             Text("Settings", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(start = 24.dp, top = 18.dp, bottom = 6.dp))
@@ -127,6 +135,8 @@ fun SettingsScreen(actions: SettingsActions) {
                         Intent.EXTRA_TEXT, "Download videos and music with QuickTube: https://play.google.com/store/apps/details?id=${context.packageName}",
                     ), "Share QuickTube"))
                 }
+                RowDivider()
+                NavRow(QtIcons.Downloading, "Check for updates", updateSummary, tint = Teal) { updates.check(userInitiated = true) }
                 RowDivider()
                 NavRow(QtIcons.Info, "About", trailing = "v" + appVersion(context), tint = Blue, onClick = actions.about)
             }

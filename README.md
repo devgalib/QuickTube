@@ -42,7 +42,8 @@
 2. Open it and allow "Install unknown apps" for your browser when Android asks.
 3. Optional: check the file against the `.sha256` next to it.
 
-Releases are signed with the same key every time, so updates install over the previous version.
+Releases are signed with the same key every time, so updates install over the previous version. After the first install,
+QuickTube tells you when a new version is out and can update itself (Settings → Check for updates).
 
 ## Features
 
@@ -57,6 +58,7 @@ Releases are signed with the same key every time, so updates install over the pr
 | **Download engine** | Queue, pause / resume / retry, resumable chunked transfers, Wi-Fi vs mobile task limits, speed limit, "download via mobile data", progress + completion notifications, auto-refresh of expired YouTube links. |
 | **Play tab** | Downloading card, downloaded list with filter (music / video / pictures), search, multi-select (share, vault, delete). Item menu: vault, play as audio, convert to audio, share, open with, rename, delete. Remembers playback position. |
 | **Player** | Speed, previous / next, seek, double-tap ±10 s, fullscreen landscape, "All videos" queue, Listen (audio-only) mode, shuffle / repeat, mini player, lock-screen and notification controls. |
+| **In-app updates** | New releases are announced inside the app with their release notes. One tap downloads, verifies (SHA-256 and the same signing key) and installs the update; Android asks once for the "install unknown apps" permission. |
 | **Settings** | Download path, max tasks, speed limit, mobile data, notification toggles, **Appearance** (System/Light/Dark, 7 accent palettes, pure-black AMOLED, Material You wallpaper colours on Android 12+), content region, feedback, share, about. |
 | **Tools** | Recycle bin (30-day recover), deleted download history with "Download again", WhatsApp status saver, PIN-locked Vault, storage clean, large files clean, app uninstaller. |
 

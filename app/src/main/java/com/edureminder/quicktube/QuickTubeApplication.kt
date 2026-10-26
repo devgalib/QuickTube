@@ -19,6 +19,7 @@ import com.edureminder.quicktube.core.download.DownloadManager
 import com.edureminder.quicktube.core.download.downloadModule
 import com.edureminder.quicktube.core.downloadsheet.downloadSheetModule
 import com.edureminder.quicktube.core.media.mediaModule
+import com.edureminder.quicktube.core.update.updateModule
 import com.edureminder.quicktube.core.ytdlp.YtDlpExtractor
 import com.edureminder.quicktube.core.ytdlp.ytDlpModule
 import com.edureminder.quicktube.di.featureModules
@@ -37,7 +38,7 @@ class QuickTubeApplication : Application(), SingletonImageLoader.Factory {
         super.onCreate()
         startKoin {
             androidContext(this@QuickTubeApplication)
-            modules(analyticsModule, dataModule, downloadModule, mediaModule, downloadSheetModule, ytDlpModule)
+            modules(analyticsModule, updateModule, dataModule, downloadModule, mediaModule, downloadSheetModule, ytDlpModule)
             modules(featureModules)
         }
         get<DownloadManager>().start()

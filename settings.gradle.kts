@@ -46,6 +46,7 @@ include(":core:downloadsheet")
 include(":core:playerui")
 include(":core:ytdlp")
 include(":core:analytics")
+include(":core:update")
 
 include(":feature:home")
 include(":feature:search")

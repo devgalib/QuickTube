@@ -2,6 +2,7 @@ package com.edureminder.quicktube.core.designsystem
 
 import android.os.Build
 import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.LocalRippleConfiguration
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RippleConfiguration
@@ -187,6 +188,10 @@ fun QuickTubeTheme(
         LocalQtExtras provides QtExtras(darkTheme, Brush.linearGradient(listOf(start, end)), start, end),
         LocalRippleConfiguration provides ripple,
     ) {
-        MaterialTheme(colorScheme = scheme, typography = typography, shapes = shapes, content = content)
+        MaterialTheme(colorScheme = scheme, typography = typography, shapes = shapes) {
+            // Default text/icon colour for everything not inside a Surface: without this, plain Text()
+            // falls back to black, which is unreadable in dark mode.
+            CompositionLocalProvider(LocalContentColor provides scheme.onBackground, content = content)
+        }
     }
 }

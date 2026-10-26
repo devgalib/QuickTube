@@ -112,7 +112,9 @@ fun AppNavHost(nav: NavHostController) {
     }
     val density = LocalDensity.current
     var overlayHeight by remember { mutableStateOf(0.dp) }
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    // Surface (not a plain Box) so screens get the theme's content colour, like Scaffold provided before.
+    androidx.compose.material3.Surface(color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
+    Box(Modifier.fillMaxSize()) {
         // Tab screens draw behind the floating bar (and see their content through the gaps around it);
         // other screens simply stop above the mini player.
         CompositionLocalProvider(LocalBottomBarHeight provides if (onTab) overlayHeight else 0.dp) {
@@ -257,6 +259,7 @@ fun AppNavHost(nav: NavHostController) {
                 )
             } else if (showMini) Spacer(Modifier.navigationBarsPadding().height(8.dp))
         }
+    }
     }
     DownloadSheetHost(onOpenInBrowser = ::openUrl)
 }

@@ -28,6 +28,24 @@ class UpdateParsingTest {
     }
 
     @Test
+    fun picksTheApkForThisPhonesCpu() {
+        fun asset(name: String) = """{"name":"$name","size":1,"browser_download_url":"https://g/$name"}"""
+        val json = """{"tag_name":"v1.0.9","assets":[
+            ${asset("QuickTube-v1.0.9-arm64-v8a.apk")}, ${asset("QuickTube-v1.0.9-arm64-v8a.apk.sha256")},
+            ${asset("QuickTube-v1.0.9-armeabi-v7a.apk")}, ${asset("QuickTube-v1.0.9-armeabi-v7a.apk.sha256")},
+            ${asset("QuickTube-v1.0.9.apk")}, ${asset("QuickTube-v1.0.9.apk.sha256")}]}"""
+        val arm64 = UpdateParsing.parseRelease(json, listOf("arm64-v8a", "armeabi-v7a", "armeabi"))!!
+        assertEquals("https://g/QuickTube-v1.0.9-arm64-v8a.apk", arm64.apkUrl)
+        assertEquals("https://g/QuickTube-v1.0.9-arm64-v8a.apk.sha256", arm64.sha256Url)
+        val arm32 = UpdateParsing.parseRelease(json, listOf("armeabi-v7a", "armeabi"))!!
+        assertEquals("https://g/QuickTube-v1.0.9-armeabi-v7a.apk", arm32.apkUrl)
+        // Unknown CPU: the universal APK.
+        val other = UpdateParsing.parseRelease(json, listOf("x86_64"))!!
+        assertEquals("https://g/QuickTube-v1.0.9.apk", other.apkUrl)
+        assertEquals("https://g/QuickTube-v1.0.9.apk.sha256", other.sha256Url)
+    }
+
+    @Test
     fun ignoresPrereleaseAndMissingApk() {
         assertNull(UpdateParsing.parseRelease("""{"tag_name":"v1.0.8","prerelease":true,"assets":[]}"""))
         assertNull(UpdateParsing.parseRelease("""{"tag_name":"v1.0.8","assets":[{"name":"notes.txt"}]}"""))

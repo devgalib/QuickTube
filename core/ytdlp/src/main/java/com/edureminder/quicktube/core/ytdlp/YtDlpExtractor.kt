@@ -11,6 +11,10 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -51,10 +55,23 @@ class YtDlpExtractor(private val context: Context) : UniversalExtractor {
      * Downloads the latest yt-dlp release straight from its release URL (no GitHub API, so no rate limits)
      * and swaps it in atomically. Skipped when the server says the file hasn't changed (ETag).
      */
-    override suspend fun update(): String? = withContext(Dispatchers.IO) {
+    override suspend fun update(): String? {
+        // One download at a time; callers arriving meanwhile share its result.
+        val job = updateLock.withLock {
+            inFlight?.takeIf { it.isActive } ?: scope.async { downloadLatest() }.also { inFlight = it }
+        }
+        return job.await()
+    }
+
+    private val updateLock = Mutex()
+    private var inFlight: Deferred<String?>? = null
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val prefs by lazy { context.getSharedPreferences("ytdlp", Context.MODE_PRIVATE) }
+
+    private suspend fun downloadLatest(): String? = withContext(Dispatchers.IO) {
         if (!awaitReady()) return@withContext null
+        prefs.edit().putLong(KEY_CHECKED, System.currentTimeMillis()).apply()
         runCatching {
-            val prefs = context.getSharedPreferences("ytdlp", Context.MODE_PRIVATE)
             val target = java.io.File(context.noBackupFilesDir, "youtubedl-android/yt-dlp/yt-dlp")
             val req = okhttp3.Request.Builder().url(RELEASE_URL)
                 .apply { prefs.getString("etag", null)?.let { header("If-None-Match", it) } }
@@ -87,8 +104,25 @@ class YtDlpExtractor(private val context: Context) : UniversalExtractor {
         return withTimeoutOrNull(60_000) { ready.await() } ?: false
     }
 
+    /**
+     * The engine bundled in the APK is months old and sites change often, so a fresh install first waits (briefly)
+     * for the latest release, and a failure on a stale engine updates it and tries once more.
+     */
     override suspend fun extract(url: String, headers: Map<String, String>): ExtractedPage? = withContext(Dispatchers.IO) {
         if (!awaitReady()) return@withContext null
+        // Only while it has never been updated and hasn't just tried (GitHub may be unreachable).
+        if (prefs.getString("etag", null) == null && System.currentTimeMillis() - prefs.getLong(KEY_CHECKED, 0) > RETRY_UPDATE_AFTER_MS) {
+            withTimeoutOrNull(FIRST_UPDATE_WAIT_MS) { update() }
+        }
+        extractOnce(url, headers) ?: run {
+            if (System.currentTimeMillis() - prefs.getLong(KEY_CHECKED, 0) < RETRY_UPDATE_AFTER_MS) return@run null
+            Log.i(TAG, "Retrying with the latest yt-dlp")
+            withTimeoutOrNull(FIRST_UPDATE_WAIT_MS) { update() }
+            extractOnce(url, headers)
+        }
+    }
+
+    private fun extractOnce(url: String, headers: Map<String, String>): ExtractedPage? {
         val req = YoutubeDLRequest(url).apply {
             addOption("--dump-single-json")
             addOption("--no-playlist")
@@ -100,102 +134,19 @@ class YtDlpExtractor(private val context: Context) : UniversalExtractor {
             headers["Cookie"]?.let { addOption("--add-header", "Cookie:$it") }
         }
         val out = runCatching { YoutubeDL.getInstance().execute(req).out }
-            .onFailure { Log.w(TAG, "yt-dlp failed for $url: ${it.message?.take(300)}") }
-            .getOrNull() ?: return@withContext null
-        val root = runCatching { json.parseToJsonElement(out).jsonObject }.getOrNull() ?: return@withContext null
+            .onFailure { Log.w(TAG, "yt-dlp failed for $url: ${it.message?.takeLast(600)}") }
+            .getOrNull() ?: return null
+        val root = runCatching { json.parseToJsonElement(out).jsonObject }.getOrNull() ?: return null
         // A playlist/multi-video page: take its first real entry.
         val info = (root["entries"] as? JsonArray)?.firstOrNull { it is JsonObject }?.jsonObject ?: root
-        toPage(info)
-    }
-
-    private fun JsonObject.str(k: String) = (this[k] as? JsonPrimitive)?.contentOrNull?.takeIf { it.isNotBlank() && it != "none" }
-    private fun JsonObject.num(k: String) = (this[k] as? JsonPrimitive)?.doubleOrNull
-    private fun JsonObject.long(k: String) = (this[k] as? JsonPrimitive)?.longOrNull
-
-    private fun toPage(info: JsonObject): ExtractedPage? {
-        val title = info.str("title") ?: info.str("id") ?: "video"
-        val pageHeaders = (info["http_headers"] as? JsonObject)?.mapValues { (it.value as? JsonPrimitive)?.contentOrNull.orEmpty() }.orEmpty()
-        val formats = (info["formats"] as? JsonArray)?.filterIsInstance<JsonObject>()
-            ?: listOfNotNull(info.takeIf { it.str("url") != null })
-        data class F(
-            val url: String, val ext: String, val height: Int, val hasV: Boolean, val hasA: Boolean,
-            val proto: StreamProtocol?, val size: Long, val abr: Double, val tbr: Double, val note: String?,
-        )
-        val fs = formats.mapNotNull { f ->
-            val url = f.str("url") ?: return@mapNotNull null
-            val p = f.str("protocol").orEmpty()
-            val proto = when {
-                p.startsWith("http") && !p.contains("dash") -> StreamProtocol.HTTP
-                p.startsWith("m3u8") -> StreamProtocol.HLS
-                else -> null // DASH fragments, RTMP, mhtml storyboards: not supported by our engine
-            } ?: return@mapNotNull null
-            val vcodec = f.str("vcodec")
-            val acodec = f.str("acodec")
-            val ext = f.str("ext") ?: "mp4"
-            if (ext == "mhtml") return@mapNotNull null
-            F(
-                url = url, ext = ext, height = (f.num("height") ?: 0.0).toInt(),
-                hasV = vcodec != null || (vcodec == null && acodec == null && f.num("height") != null),
-                hasA = acodec != null || (vcodec == null && acodec == null),
-                proto = proto, size = f.long("filesize") ?: f.long("filesize_approx") ?: -1,
-                abr = f.num("abr") ?: 0.0, tbr = f.num("tbr") ?: 0.0, note = f.str("format_note"),
-            )
-        }
-        if (fs.isEmpty()) return null
-        val options = mutableListOf<DownloadOption>()
-        val audioOnly = fs.filter { it.hasA && !it.hasV }
-        val bestAudioFor = { proto: StreamProtocol ->
-            audioOnly.filter { it.proto == proto && (it.ext == "m4a" || it.ext == "mp4" || proto == StreamProtocol.HLS) }.maxByOrNull { it.abr }
-        }
-        audioOnly.sortedByDescending { it.abr }.distinctBy { it.ext }.take(2).forEachIndexed { i, a ->
-            options += DownloadOption(
-                id = "ya$i", kind = FormatKind.AUDIO,
-                title = (if (a.ext == "m4a") "M4A" else a.ext.uppercase()) + if (a.abr > 0) " (${a.abr.toInt()}K)" else "",
-                info = "Audio", ext = if (a.proto == StreamProtocol.HLS) "m4a" else a.ext, mimeType = if (a.ext == "mp3") "audio/mpeg" else "audio/mp4",
-                url = a.url, sizeBytes = a.size, bitrate = a.abr.toInt(), protocol = a.proto!!,
-            )
-        }
-        // One choice per height: muxed file > video+audio merge > HLS.
-        val videos = fs.filter { it.hasV }.groupBy { it.height }.mapNotNull { (h, list) ->
-            val muxed = list.filter { it.hasA }.sortedWith(compareBy({ it.proto != StreamProtocol.HTTP }, { -it.tbr }))
-            val pick = muxed.firstOrNull { it.ext == "mp4" } ?: muxed.firstOrNull()
-            if (pick != null) return@mapNotNull Triple(h, pick, null as F?)
-            val vOnly = list.filter { it.ext == "mp4" || it.proto == StreamProtocol.HLS }.maxByOrNull { it.tbr } ?: return@mapNotNull null
-            val audio = bestAudioFor(vOnly.proto!!) ?: return@mapNotNull null
-            Triple(h, vOnly, audio)
-        }.sortedBy { it.first }
-        videos.forEachIndexed { i, (h, v, a) ->
-            val q = if (h > 0) "${h}p" else (v.note ?: "Video")
-            options += DownloadOption(
-                id = "yv$i", kind = FormatKind.VIDEO,
-                title = when {
-                    h in 1..360 -> "Fast ($q)"; h in 361..576 -> "Standard ($q)"; h in 577..720 -> "High quality ($q)"
-                    h in 721..1080 -> "Full HD ($q)"; h > 1080 -> "${if (h >= 2160) "4K" else "2K"} ($q)"; else -> q
-                },
-                info = "MP4" + if (v.proto == StreamProtocol.HLS) " · HLS" else "",
-                ext = "mp4", mimeType = "video/mp4", url = v.url, audioUrl = a?.url,
-                sizeBytes = v.size, audioSizeBytes = a?.size ?: -1, height = h, protocol = v.proto!!,
-                label = if (h >= 1080) "HD" else null,
-            )
-        }
-        if (audioOnly.isEmpty()) videos.firstOrNull { it.first >= 240 || it.first == 0 }?.let { (h, v, a) ->
-            options.add(0, DownloadOption(
-                id = "yx", kind = FormatKind.AUDIO, title = "M4A (audio only)", info = "Music from this video", ext = "m4a", mimeType = "audio/mp4",
-                url = v.url, audioUrl = a?.url, sizeBytes = v.size, height = h, protocol = v.proto!!, extractAudio = true,
-            ))
-        }
-        if (options.isEmpty()) return null
-        return ExtractedPage(
-            title = title,
-            thumbnail = info.str("thumbnail"),
-            durationSec = info.num("duration"),
-            options = options,
-            headers = pageHeaders,
-        )
+        return YtDlpFormats.toPage(info)
     }
 
     companion object {
         private const val TAG = "YtDlp"
+        private const val KEY_CHECKED = "checked_at"
+        private const val FIRST_UPDATE_WAIT_MS = 45_000L
+        private const val RETRY_UPDATE_AFTER_MS = 60 * 60 * 1000L
         private const val RELEASE_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp"
     }
 }

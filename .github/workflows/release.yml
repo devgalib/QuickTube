@@ -65,42 +65,53 @@ jobs:
             -PappVersionCode=${{ steps.version.outputs.code }} \
             -PappVersionName=${{ steps.version.outputs.name }}
 
-      - name: Verify signature and collect the APK
-        id: apk
+      - name: Verify signatures and collect the APKs
         env:
           EXPECTED_CERT_SHA256: b5fb3a7defdc7a3e0c0d6c3b468bc6353cd22225bbfee0585d7f337667aeb87a
         run: |
-          src=app/build/outputs/apk/release/app-release.apk
-          ls -la app/build/outputs/apk/release/
-          [ -f "$src" ] || { echo "::error::$src not found (an unsigned build would be app-release-unsigned.apk)"; exit 1; }
+          dir=app/build/outputs/apk/release
+          ls -la "$dir"
           # Newest build-tools that actually ships apksigner.
           apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)
           [ -n "$apksigner" ] || { echo "::error::apksigner not found in $ANDROID_HOME/build-tools"; exit 1; }
           echo "Using $apksigner"
-          if ! report=$("$apksigner" verify --verbose --print-certs "$src" 2>&1); then
-            echo "$report"; echo "::error::APK signature verification failed"; exit 1
-          fi
-          # Output differs between build-tools versions ("Signer #1 certificate …" vs "V2 Signer: certificate …").
-          digest=$(echo "$report" | grep -m1 -oE "certificate SHA-256 digest: [0-9a-f]{64}" | awk '{print $NF}')
-          echo "Signed with certificate SHA-256: ${digest:-none}"
-          # Fingerprint of the QuickTube release key (public; not a secret). Anything else is refused.
-          if [ "$digest" != "$EXPECTED_CERT_SHA256" ]; then
-            echo "$report"; echo "::error::APK is not signed with the QuickTube release key"; exit 1
-          fi
-          out="QuickTube-v${{ steps.version.outputs.name }}.apk"
-          mkdir -p dist && cp "$src" "dist/$out"
-          (cd dist && sha256sum "$out" > "$out.sha256")
-          echo "file=dist/$out" >> "$GITHUB_OUTPUT"
+          mkdir -p dist
+          # One APK per CPU type plus a universal one (same version code; the in-app updater picks by CPU).
+          for abi in arm64-v8a armeabi-v7a universal; do
+            src="$dir/app-$abi-release.apk"
+            [ -f "$src" ] || { echo "::error::$src not found (an unsigned build would end in -unsigned.apk)"; exit 1; }
+            if ! report=$("$apksigner" verify --verbose --print-certs "$src" 2>&1); then
+              echo "$report"; echo "::error::$src signature verification failed"; exit 1
+            fi
+            # Output differs between build-tools versions ("Signer #1 certificate …" vs "V2 Signer: certificate …").
+            digest=$(echo "$report" | grep -m1 -oE "certificate SHA-256 digest: [0-9a-f]{64}" | awk '{print $NF}')
+            echo "$abi signed with certificate SHA-256: ${digest:-none}"
+            # Fingerprint of the QuickTube release key (public; not a secret). Anything else is refused.
+            if [ "$digest" != "$EXPECTED_CERT_SHA256" ]; then
+              echo "$report"; echo "::error::$src is not signed with the QuickTube release key"; exit 1
+            fi
+            if [ "$abi" = universal ]; then out="QuickTube-v${{ steps.version.outputs.name }}.apk"
+            else out="QuickTube-v${{ steps.version.outputs.name }}-$abi.apk"; fi
+            cp "$src" "dist/$out"
+            (cd dist && sha256sum "$out" > "$out.sha256")
+          done
+          ls -la dist
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           tag="v${{ steps.version.outputs.name }}"
+          universal="dist/QuickTube-$tag.apk"
           prev=$(gh release list --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)
           args=(--target "${{ github.sha }}" --title "QuickTube $tag" --generate-notes)
           [ -n "$prev" ] && args+=(--notes-start-tag "$prev")
-          gh release create "$tag" dist/* "${args[@]}"
+          # Built as a draft (invisible to apps), universal APK uploaded last, one file at a time: versions up to
+          # 1.0.3 take the last .apk / .apk.sha256 asset. Published only once everything is there.
+          gh release create "$tag" dist/*-arm64-v8a.apk* dist/*-armeabi-v7a.apk* --draft "${args[@]}"
+          gh release upload "$tag" "$universal"
+          gh release upload "$tag" "$universal.sha256"
+          gh release edit "$tag" --draft=false --latest
 
       - name: Clean up secrets
         if: always()

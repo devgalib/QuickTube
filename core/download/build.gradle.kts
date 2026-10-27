@@ -14,4 +14,6 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.service)
     implementation(libs.okhttp)
+    implementation(libs.androidx.media3.extractor)
+    implementation(libs.androidx.media3.muxer)
 }

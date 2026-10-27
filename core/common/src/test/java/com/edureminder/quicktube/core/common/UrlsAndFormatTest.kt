@@ -44,6 +44,12 @@ class UrlsAndFormatTest {
     fun safeFileNames() {
         assertEquals("a_b_c", Urls.safeFileName("a/b:c"))
         assertEquals("download", Urls.safeFileName("   "))
+        // Long Bengali + emoji title (3–4 bytes per character): must fit Android's 255-byte name limit with suffixes.
+        val long = "350K views · 1.3K reactions | আমি এই বিল্ডিংয়ে জীবনের ঝুঁকি নিয়ে নিজ থেকে সাত পর্যন্ত উঠছি কারণ একটাই সমুদ্রের লাইট🕹️".repeat(3)
+        val name = Urls.safeFileName(long)
+        assertTrue(name.toByteArray(Charsets.UTF_8).size <= 150)
+        assertTrue((name + "(1080p) (12).webm.part.chunks.tmp").toByteArray(Charsets.UTF_8).size < 255)
+        assertEquals(name, String(name.toByteArray(Charsets.UTF_8), Charsets.UTF_8)) // no broken character
     }
 
     @Test

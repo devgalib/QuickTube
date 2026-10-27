@@ -5,5 +5,6 @@ import org.koin.dsl.module
 
 val downloadSheetModule = module {
     single { DownloadSheetController() }
-    viewModel { DownloadSheetViewModel(get(), get(), get(), get(), get(), get()) }
+    single { BatchDownloader(get(), get(), get()) }
+    viewModel { DownloadSheetViewModel(get(), get(), get(), get(), get(), get(), get()) }
 }

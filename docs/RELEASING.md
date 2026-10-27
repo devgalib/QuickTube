@@ -20,18 +20,27 @@ The workflow then:
 1. names the version `<appVersionBase>.<run number>` (e.g. `1.0.7`, versionCode `7`). `appVersionBase` lives in `gradle.properties`;
    bump it (e.g. to `1.1`) for a feature release. Version codes always increase, so updates install over older versions.
 2. restores the signing key and `google-services.json` from encrypted secrets (they never exist in the repository),
-3. builds `assembleRelease` with R8, verifies the APK signature,
-4. creates the `vX.Y.Z` tag and a GitHub Release with `QuickTube-vX.Y.Z.apk`, its `.sha256`, and notes generated from merged PRs.
+3. builds `assembleRelease` with R8 and resource shrinking, verifies every APK's signature,
+4. creates the `vX.Y.Z` tag and a GitHub Release with one APK per CPU type (`QuickTube-vX.Y.Z-arm64-v8a.apk`,
+   `QuickTube-vX.Y.Z-armeabi-v7a.apk`, ~35% smaller) plus the universal `QuickTube-vX.Y.Z.apk`, each with a `.sha256`, and
+   notes generated from merged PRs. The universal APK and its checksum are uploaded last: versions up to 1.0.3 take the last
+   `.apk` asset, so they keep updating correctly.
 
 ## How users get the update
 
 Installed apps check `api.github.com/repos/devgalib/QuickTube/releases/latest` on launch (at most every 6 hours; release
 builds only) and in Settings → Check for updates. When the tag's last number (the versionCode) is higher than theirs, they get an
-"Update available" sheet with the release notes. **Update now** downloads the APK, checks it against the `.sha256` asset and
+"Update available" sheet with the release notes. **Update now** downloads the APK for the phone's CPU (the universal one if
+there's no match), checks it against its `.sha256` asset and
 the installed app's signing key, then installs it with Android's PackageInstaller. Users allow "install unknown apps" for
 QuickTube once; Google Play Protect may also offer to scan the app the first time.
 
-So a release only needs: tag `v<appVersionBase>.<versionCode>`, an `*.apk` asset and its `*.apk.sha256`. The workflow does this.
+After the update, the downloaded APK is deleted (right away when Android announces the replaced package, otherwise on the next
+start), like the Play Store does. Downloads, history and settings are untouched: they live in the app's database and settings,
+which Android keeps across updates, and the database only migrates forward.
+
+So a release only needs: tag `v<appVersionBase>.<versionCode>`, an `*.apk` asset and its `*.apk.sha256` (optionally per-ABI
+`*-<abi>.apk` ones). The workflow does this.
 Drafts and pre-releases are never offered.
 
 Test against a fake release: build with `-PupdateApiUrl=http://localhost:8765/latest.json`, serve a release JSON plus the APK

@@ -11,6 +11,7 @@ import com.edureminder.quicktube.core.media.PlayerController
 import com.edureminder.quicktube.core.model.ChannelDetails
 import com.edureminder.quicktube.core.model.Comment
 import com.edureminder.quicktube.core.model.FormatKind
+import com.edureminder.quicktube.core.model.ItemKind
 import com.edureminder.quicktube.core.model.MediaItem
 import com.edureminder.quicktube.core.model.PlaylistDetails
 import com.edureminder.quicktube.core.model.VideoDetails
@@ -115,6 +116,8 @@ data class ListPageUi(
     val loadingMore: Boolean = false,
     val error: String? = null,
     val next: Any? = null,
+    /** Fetching every remaining page for "Download all". */
+    val loadingAll: Boolean = false,
 )
 
 /** Shared by channel and playlist pages. */
@@ -149,5 +152,24 @@ class ListPageViewModel(private val media: MediaRepository) : ViewModel() {
                 .onFailure { _ui.update { it.copy(loadingMore = false, next = null) } }
         }
     }
-}
 
+    /** Loads every remaining page (up to [MAX_ALL] videos), then hands all videos to [onReady]. */
+    fun loadAll(onReady: (List<MediaItem>) -> Unit) {
+        if (_ui.value.loadingAll) return
+        _ui.update { it.copy(loadingAll = true) }
+        viewModelScope.launch {
+            var next = _ui.value.next
+            while (next != null && _ui.value.items.size < MAX_ALL) {
+                val page = runCatching { if (isChannel) media.channel(url, next).videos else media.playlist(url, next).videos }.getOrNull() ?: break
+                _ui.update { it.copy(items = (it.items + page.items).distinctBy { i -> i.url }, next = page.nextPage) }
+                next = page.nextPage
+            }
+            _ui.update { it.copy(loadingAll = false) }
+            onReady(_ui.value.items.filter { it.kind == ItemKind.VIDEO })
+        }
+    }
+
+    private companion object {
+        const val MAX_ALL = 1000
+    }
+}

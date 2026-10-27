@@ -216,12 +216,17 @@ class StreamResolver(private val client: OkHttpClient, private val hls: HlsClien
             val media = hls.loadMedia(p.variants.maxBy { it.bandwidth }.url, headers)
             val dur = media.durationSec
             // A master listed under a quality label (e.g. "720p") with a single variant keeps that label.
-            val options = p.variants.mapIndexed { i, v ->
+            // Skip AV1 variants this phone can't play, when there's any other choice.
+            val usable = p.variants.filter { v ->
+                val c = v.codecs?.lowercase() ?: return@filter true
+                !c.contains("av01") || com.edureminder.quicktube.core.common.DeviceCodecs.canDecodeAv1
+            }.ifEmpty { p.variants }
+            val options = usable.mapIndexed { i, v ->
                 val audio = v.audioGroup?.let { g -> p.audios.filter { it.groupId == g }.let { a -> a.firstOrNull { it.isDefault } ?: a.firstOrNull() } }
-                val h = if (v.height > 0) v.height else if (p.variants.size == 1) c.height else 0
+                val h = if (v.height > 0) v.height else if (usable.size == 1) c.height else 0
                 DownloadOption(
                     id = "h-" + v.url.hashCode(), kind = FormatKind.VIDEO,
-                    title = titleFor(h, if (p.variants.size == 1) c.label else null, "Quality ${i + 1}"),
+                    title = titleFor(h, if (usable.size == 1) c.label else null, "Quality ${i + 1}"),
                     info = "MP4 · HLS", ext = "mp4", mimeType = "video/mp4", url = v.url, audioUrl = audio?.url,
                     sizeBytes = if (v.bandwidth > 0 && dur > 0) (v.bandwidth * dur / 8).toLong() else -1,
                     height = h, protocol = StreamProtocol.HLS,

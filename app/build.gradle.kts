@@ -67,6 +67,17 @@ android {
     }
     buildFeatures { buildConfig = true }
 
+    // One APK per CPU type (each ~35% smaller: the bundled Python runtime is per-ABI), plus a universal one.
+    // The in-app updater downloads the one matching the phone; the universal APK stays for manual installs.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = true
+        }
+    }
+
     packaging {
         resources.excludes += setOf("/META-INF/{AL2.0,LGPL2.1}", "META-INF/DEPENDENCIES")
         // yt-dlp's Python runtime is unpacked from native libs at first launch.

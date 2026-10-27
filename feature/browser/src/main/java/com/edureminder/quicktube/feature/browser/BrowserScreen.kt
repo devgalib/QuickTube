@@ -119,6 +119,32 @@ private const val SNIFF_JS = """
 }catch(e){}})();
 """
 
+/**
+ * For the invisible browser behind the share sheet: every video plays at volume 0 (nothing is heard) and counts
+ * as started by the user, so the page's main video is detected exactly as when the user taps play.
+ */
+private const val SILENT_JS = """
+(function(){try{
+ if(window.__qtSilent)return; window.__qtSilent=true;
+ function hush(v){try{v.__qtUser=true; if(v.volume!==0)v.volume=0;}catch(x){}}
+ ['play','playing','volumechange','loadedmetadata'].forEach(function(e){document.addEventListener(e,function(ev){
+  if(ev.target&&ev.target.tagName&&/^(VIDEO|AUDIO)$/.test(ev.target.tagName))hush(ev.target);},true);});
+ try{var op=HTMLMediaElement.prototype.play;HTMLMediaElement.prototype.play=function(){hush(this);return op.apply(this,arguments);};}catch(x){}
+ document.querySelectorAll('video,audio').forEach(hush);
+ // Nobody can tap play on an invisible page, so start the player like the user would (silently). Many players
+ // (e.g. Vimeo's) only load the video once play is pressed.
+ function kick(){try{
+  var vs=document.querySelectorAll('video'), playing=false;
+  vs.forEach(function(v){if(!v.paused&&!v.ended)playing=true;});
+  if(playing)return;
+  vs.forEach(function(v){hush(v);var p=v.play();if(p&&p.catch)p.catch(function(){});});
+  var b=document.querySelector('[aria-label="Play"],[aria-label^="Play video"],[data-play-button],.vp-big-play-button,.vjs-big-play-button,.ytp-large-play-button,.jw-display-icon-display,.plyr__control--overlaid');
+  if(b)b.click();
+ }catch(x){}}
+ setTimeout(kick,800); setInterval(kick,2500);
+}catch(e){}})();
+"""
+
 /** Hands the rendered page (after scripts, with the user's session) to the page parser. */
 private fun grabHtml(view: WebView, vm: BrowserViewModel) {
     val url = view.url ?: return
@@ -162,10 +188,14 @@ fun BrowserScreen(
     onOpenVideo: (String) -> Unit,
     onOpenHistory: () -> Unit,
     onOpenBookmarks: () -> Unit,
+    /** Invisible and muted (behind the share sheet): no sound, no history. */
+    silent: Boolean = false,
+    /** Separates browser states that open the same URL (each share gets a fresh one). */
+    stateKey: String = startUrl,
 ) {
-    val vm = koinViewModel<BrowserViewModel>(key = startUrl)
+    val vm = koinViewModel<BrowserViewModel>(key = stateKey)
     val fetcher = remember { PageFetcher() }
-    LaunchedEffect(Unit) { vm.autoDownload = autoDownload; vm.pageFetch = fetcher::fetch }
+    LaunchedEffect(Unit) { vm.autoDownload = autoDownload; vm.pageFetch = fetcher::fetch; vm.recordHistory = !silent }
     val ui by vm.ui.collectAsStateWithLifecycle()
     val saved by vm.bookmarked.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -193,6 +223,7 @@ fun BrowserScreen(
     LaunchedEffect(webView, ui.url) {
         while (true) {
             delay(2500)
+            if (silent) webView?.evaluateJavascript(SILENT_JS, null)
             webView?.evaluateJavascript(SNIFF_JS, null)
         }
     }
@@ -276,6 +307,7 @@ fun BrowserScreen(
                         // Run the detector in every frame (embedded players live in iframes) from the very start.
                         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                             WebViewCompat.addDocumentStartJavaScript(this, SNIFF_JS, setOf("*"))
+                            if (silent) WebViewCompat.addDocumentStartJavaScript(this, SILENT_JS, setOf("*"))
                         }
                         vm.userAgent = settings.userAgentString
                         addJavascriptInterface(object {
@@ -307,6 +339,13 @@ fun BrowserScreen(
                             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                                 val u = request.url.toString()
                                 if (u.startsWith("http")) return false
+                                // The invisible page behind the share sheet must never open another app (e.g. Facebook's
+                                // "open in app" bounce); it stays on the web page.
+                                if (silent) {
+                                    runCatching { Intent.parseUri(u, Intent.URI_INTENT_SCHEME).getStringExtra("browser_fallback_url") }
+                                        .getOrNull()?.takeIf { it.startsWith("http") }?.let(view::loadUrl)
+                                    return true
+                                }
                                 val intent = runCatching {
                                     if (u.startsWith("intent:")) Intent.parseUri(u, Intent.URI_INTENT_SCHEME) else Intent(Intent.ACTION_VIEW, Uri.parse(u))
                                 }.getOrNull() ?: return true
@@ -324,6 +363,7 @@ fun BrowserScreen(
 
                             override fun onPageFinished(view: WebView, url: String) {
                                 vm.onPageFinished(url, view.title)
+                                if (silent) view.evaluateJavascript(SILENT_JS, null)
                                 view.evaluateJavascript(SNIFF_JS, null)
                                 grabHtml(view, vm)
                                 // Players often inject their config a moment after load.
@@ -374,9 +414,11 @@ fun BrowserScreen(
                                 customView = null
                             }
                         }
-                        setDownloadListener { url, ua, disposition, mime, _ ->
+                        // The invisible page behind the share sheet never offers files (an ad could trigger one).
+                        if (!silent) setDownloadListener { url, ua, disposition, mime, _ ->
                             vm.downloadFile(url, mime, URLUtil.guessFileName(url, disposition, mime))
                         }
+                        if (silent && WebViewFeature.isFeatureSupported(WebViewFeature.MUTE_AUDIO)) WebViewCompat.setAudioMuted(this, true)
                         loadUrl(startUrl)
                         webView = this
                     }

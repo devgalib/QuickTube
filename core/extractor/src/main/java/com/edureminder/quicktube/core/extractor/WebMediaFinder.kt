@@ -33,32 +33,47 @@ data class FoundPage(
  * reads Open Graph tags, inline JSON players and direct media links.
  */
 class WebMediaFinder(private val client: OkHttpClient) {
+    private val POST = Regex("""reddit\.com/r/([A-Za-z0-9_]+)/comments/([a-z0-9]+)""")
+
 
     suspend fun find(pageUrl: String): FoundPage? = withContext(Dispatchers.IO) {
         if (DIRECT_MEDIA.containsMatchIn(pageUrl.substringBefore('?'))) {
             return@withContext FoundPage(pageUrl.substringAfterLast('/').substringBefore('?'), null, pageUrl, listOf(FoundMedia(pageUrl, mimeFor(pageUrl))))
         }
         twitter(pageUrl)?.let { return@withContext it }
-        val html = runCatching { get(pageUrl, MOBILE_UA) }.getOrNull()
-            ?: return@withContext null
-        val (body, finalUrl) = html
-        val found = parse(body, finalUrl)
+        reddit(pageUrl)?.let { return@withContext it }
+        // Some sites (Facebook) refuse the mobile browser outright; try the desktop one then.
+        val mobile = runCatching { get(pageUrl, MOBILE_UA) }.getOrNull()
+            ?: return@withContext runCatching { get(pageUrl, DESKTOP_UA) }.getOrNull()?.parsed(DESKTOP_UA)?.takeIf { it.candidates.isNotEmpty() }
+        val found = mobile.parsed(MOBILE_UA)
         if (found.candidates.isNotEmpty()) return@withContext found
         // Some sites only expose media to desktop browsers.
         val desktop = runCatching { get(pageUrl, DESKTOP_UA) }.getOrNull() ?: return@withContext found.takeIf { it.media.isNotEmpty() }
-        parse(desktop.first, desktop.second).takeIf { it.candidates.isNotEmpty() }
+        desktop.parsed(DESKTOP_UA).takeIf { it.candidates.isNotEmpty() }
+    }
+
+    private class Fetched(val body: String, val finalUrl: String, val cookies: String?)
+
+    /**
+     * The media URLs a page hands out are often only served to the same "browser": e.g. TikTok's video
+     * server answers 403 without the cookies the page set. Downloads get them, with the same User-Agent.
+     */
+    private fun Fetched.parsed(ua: String): FoundPage {
+        val page = parse(body, finalUrl)
+        return page.copy(headers = page.headers + ("User-Agent" to ua) + (cookies?.let { mapOf("Cookie" to it) } ?: emptyMap()))
     }
 
     fun parse(html: String, pageUrl: String): FoundPage {
         PageMediaParser.parse(html, pageUrl)?.let { pm ->
-            return FoundPage(pm.title ?: "video", pm.thumbnail, pageUrl, emptyList(), mapOf("Referer" to pageUrl), pm.durationSec, pm.candidates)
+            val real = pm.candidates.filterNot { isSiteAsset(it.url) }
+            if (real.isNotEmpty()) return FoundPage(pm.title ?: "video", pm.thumbnail, pageUrl, emptyList(), mapOf("Referer" to pageUrl), pm.durationSec, real)
         }
         val title = meta(html, "og:title") ?: Regex("<title[^>]*>([^<]*)</title>", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)?.trim()
             ?: "video"
         val thumb = meta(html, "og:image") ?: meta(html, "twitter:image")
         val media = linkedMapOf<String, FoundMedia>()
         fun add(raw: String?, quality: String? = null, height: Int = 0) {
-            val u = raw?.let(::unescape)?.takeIf { it.startsWith("http") } ?: return
+            val u = raw?.let(::unescape)?.takeIf { it.startsWith("http") && !isSiteAsset(it) } ?: return
             if (u !in media) media[u] = FoundMedia(u, mimeFor(u), quality, height)
         }
         // Facebook
@@ -86,11 +101,39 @@ class WebMediaFinder(private val client: OkHttpClient) {
         return FoundPage(decodeEntities(title), thumb?.let(::unescape), pageUrl, media.values.toList(), mapOf("Referer" to pageUrl))
     }
 
+    /**
+     * Reddit: www.reddit.com answers apps with a browser check and its API needs an account, but the embed
+     * page names the post's v.redd.it video, whose HLS playlist (H.264 + AAC) is public.
+     */
+    private fun reddit(pageUrl: String): FoundPage? {
+        val host = runCatching { java.net.URI(pageUrl).host.orEmpty().lowercase() }.getOrDefault("")
+        if (!(host == "redd.it" || host == "v.redd.it" || host == "reddit.com" || host.endsWith(".reddit.com"))) return null
+        if (host == "v.redd.it") return redditVideo(pageUrl.trimEnd('/').substringAfterLast('/'), "Reddit video", pageUrl)
+        // Share links (/r/sub/s/abc, redd.it/abc) redirect to the post.
+        val post = POST.find(pageUrl) ?: runCatching { resolve(pageUrl) }.getOrNull()?.let { POST.find(it) } ?: return null
+        val (sub, id) = post.destructured
+        val embed = runCatching { get("https://embed.reddit.com/r/$sub/comments/$id/", MOBILE_UA).body }.getOrNull() ?: return null
+        val video = Regex("""v\.redd\.it/([a-z0-9]+)""").find(embed)?.groupValues?.get(1) ?: return null
+        val title = Regex(""""title"\s*:\s*"((?:[^"\\]|\\.){1,300})"""").find(embed)?.groupValues?.get(1)?.let(::unescape) ?: "Reddit video"
+        return redditVideo(video, title, pageUrl)
+    }
+
+    private fun redditVideo(id: String, title: String, pageUrl: String) = FoundPage(
+        title = title, thumbnail = null, pageUrl = pageUrl, media = emptyList(),
+        headers = mapOf("User-Agent" to MOBILE_UA),
+        declared = listOf(StreamCandidate("https://v.redd.it/$id/HLSPlaylist.m3u8")),
+    )
+
+    /** Final URL after redirects, without reading the body. */
+    private fun resolve(url: String): String = client.newCall(
+        Request.Builder().url(url).header("User-Agent", MOBILE_UA).build(),
+    ).execute().use { it.request.url.toString() }
+
     /** X / Twitter: uses the public embed endpoint that powers tweet widgets. */
     private fun twitter(pageUrl: String): FoundPage? {
         val id = Regex("""(?:twitter\.com|x\.com)/[^/]+/status/(\d+)""").find(pageUrl)?.groupValues?.get(1) ?: return null
         val token = toBase36Token(id)
-        val json = runCatching { get("https://cdn.syndication.twimg.com/tweet-result?id=$id&lang=en&token=$token", DESKTOP_UA).first }.getOrNull()
+        val json = runCatching { get("https://cdn.syndication.twimg.com/tweet-result?id=$id&lang=en&token=$token", DESKTOP_UA).body }.getOrNull()
             ?: return null
         val o = runCatching { JSONObject(json) }.getOrNull() ?: return null
         val text = o.optString("text").ifBlank { "X video $id" }
@@ -129,7 +172,7 @@ class WebMediaFinder(private val client: OkHttpClient) {
         return sb.toString().replace(Regex("(0+|\\.)"), "")
     }
 
-    private fun get(url: String, ua: String): Pair<String, String> {
+    private fun get(url: String, ua: String): Fetched {
         val req = Request.Builder().url(url)
             .header("User-Agent", ua)
             .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
@@ -137,7 +180,17 @@ class WebMediaFinder(private val client: OkHttpClient) {
             .build()
         client.newCall(req).execute().use { r ->
             if (!r.isSuccessful) throw java.io.IOException("HTTP ${r.code}")
-            return r.body.string() to r.request.url.toString()
+            // Cookies set anywhere along the redirect chain (short links set them before redirecting).
+            val jar = linkedMapOf<String, String>()
+            generateSequence(r) { it.priorResponse }.toList().asReversed().forEach { resp ->
+                resp.headers("Set-Cookie").forEach { c ->
+                    val pair = c.substringBefore(';')
+                    val name = pair.substringBefore('=').trim()
+                    if (name.isNotEmpty() && '=' in pair) jar[name] = pair.substringAfter('=')
+                }
+            }
+            val cookies = jar.entries.joinToString("; ") { "${it.key}=${it.value}" }.takeIf { it.isNotEmpty() }
+            return Fetched(r.body.string(), r.request.url.toString(), cookies)
         }
     }
 
@@ -153,6 +206,14 @@ class WebMediaFinder(private val client: OkHttpClient) {
     private fun absolutize(u: String, base: String) = runCatching { java.net.URI(base).resolve(u).toString() }.getOrDefault(u)
 
     companion object {
+        /**
+         * The site's own interface files (sounds, animations) rather than the post's media, e.g. Meta's
+         * static.cdninstagram.com/rsrc.php/…mp4 that logged-out Threads pages carry.
+         */
+        fun isSiteAsset(url: String): Boolean = SITE_ASSET.containsMatchIn(url.replace("\\/", "/"))
+
+        private val SITE_ASSET = Regex("""/rsrc\.php/|//static\.(?:cdninstagram\.com|xx\.fbcdn\.net|whatsapp\.net)/""")
+
         private val DIRECT_MEDIA = Regex("""\.(mp4|m4a|mp3|webm|mkv|mov|3gp|ogg|wav|jpg|jpeg|png|gif|webp)$""", RegexOption.IGNORE_CASE)
         const val MOBILE_UA = "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36"
         const val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"

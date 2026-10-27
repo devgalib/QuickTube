@@ -276,14 +276,23 @@ private fun ActiveCard(task: DownloadTask, count: Int, speed: Long, onClick: () 
     }
 }
 
+/** "1.0 / 5.7 GB" (one unit when both share it) so the status line fits small screens. */
+private fun compactProgress(done: Long, total: Long?): String {
+    val d = Format.bytes(done)
+    if (total == null) return d
+    val t = Format.bytes(total)
+    val du = d.substringAfterLast(' ')
+    return if (du == t.substringAfterLast(' ')) d.substringBeforeLast(' ') + " / " + t else "$d / $t"
+}
+
 fun statusText(task: DownloadTask, speed: Long): String = when (task.status) {
-    DownloadStatus.RUNNING -> Format.speed(speed) + " · " + Format.bytes(task.downloadedBytes + task.audioDownloadedBytes) +
-        (if (task.totalBytes > 0) " / " + Format.bytes(task.totalBytes + task.audioTotalBytes.coerceAtLeast(0)) else "")
+    DownloadStatus.RUNNING -> Format.speed(speed) + " · " +
+        compactProgress(task.downloadedBytes + task.audioDownloadedBytes, task.totalBytes.takeIf { it > 0 }?.plus(task.audioTotalBytes.coerceAtLeast(0)))
     DownloadStatus.QUEUED -> "Waiting…"
     DownloadStatus.PAUSED -> "Paused"
     DownloadStatus.WAITING_NETWORK -> "Waiting for network"
     DownloadStatus.MERGING -> "Processing video…"
-    DownloadStatus.FAILED -> task.error ?: "Failed"
+    DownloadStatus.FAILED -> com.edureminder.quicktube.core.common.DownloadErrors.friendly(task.error)
     DownloadStatus.COMPLETED -> "Completed"
 }
 

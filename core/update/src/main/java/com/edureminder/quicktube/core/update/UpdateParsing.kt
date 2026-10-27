@@ -22,30 +22,33 @@ object UpdateParsing {
     fun versionCodeOf(tag: String): Long? =
         Regex("""^v?\d+(?:\.\d+)*\.(\d+)$""").matchEntire(tag.trim())?.groupValues?.get(1)?.toLongOrNull()
 
-    fun parseRelease(json: String): UpdateInfo? {
+    /**
+     * Picks the APK built for this phone's CPU ([abis], most preferred first, e.g. `Build.SUPPORTED_ABIS`):
+     * `QuickTube-v1.0.9-arm64-v8a.apk`, falling back to the universal `QuickTube-v1.0.9.apk`. Each APK's
+     * checksum is the asset named `<apk>.sha256`.
+     */
+    fun parseRelease(json: String, abis: List<String> = emptyList()): UpdateInfo? {
         val o = runCatching { JSONObject(json) }.getOrNull() ?: return null
         if (o.optBoolean("draft") || o.optBoolean("prerelease")) return null
         val tag = o.optString("tag_name")
         val code = versionCodeOf(tag) ?: return null
         val assets = o.optJSONArray("assets") ?: return null
-        var apk: JSONObject? = null
-        var sha: String? = null
-        for (i in 0 until assets.length()) {
-            val a = assets.getJSONObject(i)
-            val name = a.optString("name")
-            when {
-                name.endsWith(".apk.sha256") -> sha = a.optString("browser_download_url")
-                name.endsWith(".apk") -> apk = a
-            }
-        }
-        val asset = apk ?: return null
+        val all = (0 until assets.length()).map { assets.getJSONObject(it) }
+        val apks = all.filter { it.optString("name").endsWith(".apk") }
+        if (apks.isEmpty()) return null
+        val knownAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64", "x86")
+        fun abiOf(name: String) = knownAbis.firstOrNull { name.endsWith("-$it.apk") }
+        val asset = abis.firstNotNullOfOrNull { abi -> apks.firstOrNull { abiOf(it.optString("name")) == abi } }
+            ?: apks.firstOrNull { abiOf(it.optString("name")) == null }
+            ?: return null
+        val shaName = asset.optString("name") + ".sha256"
         return UpdateInfo(
             versionCode = code,
             versionName = tag.removePrefix("v"),
             notes = cleanNotes(o.optString("body")),
             apkUrl = asset.optString("browser_download_url"),
             apkSize = asset.optLong("size", -1),
-            sha256Url = sha,
+            sha256Url = all.firstOrNull { it.optString("name") == shaName }?.optString("browser_download_url"),
             pageUrl = o.optString("html_url"),
         )
     }

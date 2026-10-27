@@ -57,3 +57,12 @@ class UpdateInstallReceiver : BroadcastReceiver(), KoinComponent {
         }
     }
 }
+
+/** Android tells the new version it replaced the old one: clear the downloaded update file straight away. */
+class UpdateCleanupReceiver : BroadcastReceiver(), KoinComponent {
+    private val manager: UpdateManager by inject()
+
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) manager.cleanUpInstalledUpdates()
+    }
+}

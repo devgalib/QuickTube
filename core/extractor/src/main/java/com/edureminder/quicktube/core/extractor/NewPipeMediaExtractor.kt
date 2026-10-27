@@ -223,15 +223,24 @@ class NewPipeMediaExtractor(
         // Muxed (audio+video) streams are ready to play as-is.
         val muxed = info.videoStreams.filter { it.isUrl && !it.isVideoOnly && it.format == NpFormat.MPEG_4 }
         val bestAudio = m4a.lastOrNull()
-        val videoOnly = info.videoOnlyStreams.filter {
-            it.isUrl && it.format == NpFormat.MPEG_4 && it.codec?.startsWith("avc") != false
+        // H.264 at every height it exists; VP9 (and AV1 where the phone plays it) for the heights it doesn't, such as
+        // 1440p/4K. They're merged into MP4 by Media3, which takes VP9/AV1 on any Android version.
+        fun rank(v: org.schabi.newpipe.extractor.stream.VideoStream): Int {
+            val c = v.codec?.lowercase().orEmpty()
+            return when {
+                c.startsWith("avc") || c.isEmpty() && v.format == NpFormat.MPEG_4 -> 0
+                c.startsWith("vp9") || c.startsWith("vp09") -> 1
+                c.startsWith("av01") && com.edureminder.quicktube.core.common.DeviceCodecs.canDecodeAv1 -> 2
+                else -> 9
+            }
         }
+        val videoOnly = info.videoOnlyStreams.filter { it.isUrl && rank(it) < 9 }
         val byHeight = linkedMapOf<Int, DownloadOption>()
         muxed.forEach { v -> byHeight[v.height] = v.toOption(null, 0) }
         if (bestAudio != null) {
             videoOnly.groupBy { it.height }.forEach { (h, list) ->
                 if (h in byHeight) return@forEach
-                val v = list.maxBy { it.fps }
+                val v = list.sortedWith(compareBy({ rank(it) }, { -it.fps })).first()
                 byHeight[h] = v.toOption(bestAudio, bestAudio.size())
             }
         }
@@ -253,21 +262,22 @@ class NewPipeMediaExtractor(
     )
 
     private fun VideoStream.toOption(audio: AudioStream?, audioSize: Long): DownloadOption {
-        val q = "${height}p"
+        // Vertical videos (Shorts) are named by their short side, like the YouTube app: 1080x1920 is 1080p.
+        val res = if (width in 1 until height) width else height
+        val q = "${res}p"
         val title = when {
-            height <= 240 -> "Fast ($q)"
-            height <= 360 -> "Fast ($q)"
-            height <= 480 -> "Standard ($q)"
-            height <= 720 -> "High quality ($q)"
-            height <= 1080 -> "Full HD ($q)"
-            height <= 1440 -> "2K ($q)"
+            res <= 360 -> "Fast ($q)"
+            res <= 480 -> "Standard ($q)"
+            res <= 720 -> "High quality ($q)"
+            res <= 1080 -> "Full HD ($q)"
+            res <= 1440 -> "2K ($q)"
             else -> "4K ($q)"
         }
         val desc = when {
-            height <= 240 -> "Poor video quality"
-            height <= 360 -> "Normal quality, saves data"
-            height <= 480 -> "Good quality"
-            height <= 720 -> "HD quality"
+            res <= 240 -> "Poor video quality"
+            res <= 360 -> "Normal quality, saves data"
+            res <= 480 -> "Good quality"
+            res <= 720 -> "HD quality"
             else -> "Best quality, larger file"
         }
         return DownloadOption(
@@ -281,10 +291,10 @@ class NewPipeMediaExtractor(
             audioUrl = audio?.content,
             sizeBytes = size(),
             audioSizeBytes = if (audio != null) audioSize else -1,
-            height = height,
+            height = res,
             label = when {
-                height <= 240 -> "Low"
-                height >= 1080 -> "HD"
+                res <= 240 -> "Low"
+                res >= 1080 -> "HD"
                 else -> null
             },
         )

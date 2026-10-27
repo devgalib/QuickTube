@@ -97,9 +97,12 @@ class BrowserViewModel(
         }
     }
 
+    /** False for the invisible browser behind the share sheet: those pages weren't visited by the user. */
+    var recordHistory = true
+
     fun onPageFinished(url: String, title: String?) {
         _ui.update { it.copy(title = title.orEmpty()) }
-        viewModelScope.launch { repo.recordVisit(title.orEmpty(), url) }
+        if (recordHistory) viewModelScope.launch { repo.recordVisit(title.orEmpty(), url) }
     }
 
     fun onProgress(p: Int, canGoBack: Boolean) = _ui.update { it.copy(progress = p, canGoBack = canGoBack) }

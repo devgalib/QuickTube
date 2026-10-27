@@ -70,8 +70,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.edureminder.quicktube.core.common.Urls
 import com.edureminder.quicktube.core.designsystem.BrandTitle
@@ -188,7 +186,10 @@ private fun DiscoverTab(
     val music by vm.music.collectAsStateWithLifecycle()
     val recent by vm.recent.collectAsStateWithLifecycle()
     var clip by remember { mutableStateOf<String?>(null) }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { clip = readClipboardUrl(context) }
+    // Android 10+ only lets an app read the clipboard while its window has focus, which comes after
+    // ON_RESUME, so read it whenever focus arrives (coming back from another app included).
+    val focused = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
+    LaunchedEffect(focused) { if (focused) clip = readClipboardUrl(context) }
     val list = rememberLazyListState()
 
     Box(Modifier.fillMaxSize()) {

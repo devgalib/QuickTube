@@ -52,7 +52,13 @@ class MainActivity : ComponentActivity() {
         requestStartupPermissions()
         player.connect()
         // Look for a new GitHub release (throttled; release builds only unless the URL was overridden for testing).
-        if (savedInstanceState == null) updates.checkOnLaunch(force = BuildConfig.UPDATE_URL_OVERRIDDEN)
+        if (savedInstanceState == null) {
+            updates.cleanUpInstalledUpdates()
+            updates.consumeJustUpdated()?.let { v ->
+                android.widget.Toast.makeText(this, "QuickTube updated to $v", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            updates.checkOnLaunch(force = BuildConfig.UPDATE_URL_OVERRIDDEN)
+        }
         if (savedInstanceState == null) pendingIntent = intent
         setContent {
             val s by settings.settings.collectAsStateWithLifecycle(AppSettings())

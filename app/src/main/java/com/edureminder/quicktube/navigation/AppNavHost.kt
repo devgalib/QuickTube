@@ -261,5 +261,8 @@ fun AppNavHost(nav: NavHostController) {
         }
     }
     }
-    DownloadSheetHost(onOpenInBrowser = ::openUrl)
+    DownloadSheetHost(onOpenInBrowser = ::openUrl, onOpenExisting = { task ->
+        val done = task.status == com.edureminder.quicktube.core.model.DownloadStatus.COMPLETED
+        nav.navigate(if (done) LibraryRoute else DownloadingRoute) { launchSingleTop = true }
+    })
 }

@@ -41,8 +41,24 @@ interface DownloadDao {
     @Update
     suspend fun update(entity: DownloadEntity)
 
+    /**
+     * An earlier download of the same video in the same quality: same page, or (Facebook gives a new share link
+     * each time) the same title from the same site. Items in the recycle bin don't count.
+     */
+    @Query(
+        "SELECT * FROM downloads WHERE deletedAt = 0 AND quality IS :quality AND " +
+            "((:page IS NOT NULL AND pageUrl = :page) OR (title = :title AND sourceHost IS :host)) ORDER BY id DESC LIMIT 1",
+    )
+    suspend fun findSame(page: String?, title: String, host: String?, quality: String?): DownloadEntity?
+
+    @Query("SELECT COUNT(*) FROM downloads WHERE filePath = :path")
+    suspend fun countWithPath(path: String): Int
+
     @Query("UPDATE downloads SET downloadedBytes = :video, audioDownloadedBytes = :audio WHERE id = :id")
     suspend fun updateProgress(id: Long, video: Long, audio: Long)
+
+    @Query("UPDATE downloads SET downloadedBytes = :video, audioDownloadedBytes = :audio, totalBytes = :videoTotal, audioTotalBytes = :audioTotal WHERE id = :id")
+    suspend fun updateTransfer(id: Long, video: Long, audio: Long, videoTotal: Long, audioTotal: Long)
 
     @Query("UPDATE downloads SET status = :status, error = :error WHERE id = :id")
     suspend fun updateStatus(id: Long, status: DownloadStatus, error: String? = null)

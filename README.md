@@ -38,7 +38,9 @@
 
 ## Install
 
-1. Open the [latest release](https://github.com/devgalib/QuickTube/releases/latest) on your phone and download `QuickTube-vX.Y.Z.apk`.
+1. Open the [latest release](https://github.com/devgalib/QuickTube/releases/latest) on your phone and download
+   `QuickTube-vX.Y.Z-arm64-v8a.apk` (almost every phone from the last 8 years), `…-armeabi-v7a.apk` for older 32-bit phones,
+   or the larger `QuickTube-vX.Y.Z.apk` that runs on both.
 2. Open it and allow "Install unknown apps" for your browser when Android asks.
 3. Optional: check the file against the `.sha256` next to it.
 
@@ -52,10 +54,11 @@ QuickTube tells you when a new version is out and can update itself (Settings �
 | **Download tab** | *Search*: search box, "download copied link" chip, quick sites. *YouTube*: regional trending feed (music, gaming, movies, podcasts, live mixed). *Music*: song and playlist rows. *More*: per-platform "How to download" guides. |
 | **Search** | Live suggestions, recent searches, hot searches, results with All / Videos / Playlist / Channels / Music filters, plus Google / TikTok / Facebook / Instagram web search. |
 | **Video page** | Inline 720p player, Download button, play-in-background (audio only), About sheet (likes, share, watch later), comments, "Up next". Channel and playlist pages. |
+| **Playlists & channels** | **Download all**, or **Select** videos (with select all) and download them together, or download one by one. One quality for the batch (M4A / 360p / 720p / 1080p / best); each video gets its closest format, in the background. |
 | **Download sheet** | "Download video as" with Music (M4A / Opus) and Video (144p–4K) choices, plus a *More formats* page. Video-only streams are merged with audio on-device (no re-encoding). |
 | **Share to download** | "Download with QuickTube" appears in every app's share sheet. The format picker pops up over YouTube, Facebook, TikTok and other apps, and the download continues in the background. |
 | **Browser** | Built-in WebView for any site. On a video page a Download bar appears under the page (even before you press play) from the page's own player data; on listing pages it stays hidden. It offers every quality the page has, plus an audio-only M4A. Pasting or sharing a link opens the download sheet directly. This works with plain MP4 players, HLS (`.m3u8`, including AES-128 encrypted) behind `blob:` players, iframe-embedded players and shadow-DOM players. HLS is converted to MP4 on the phone. YouTube videos open the native page. Sites list (add/delete), history, saved pages. |
-| **Download engine** | Queue, pause / resume / retry, resumable chunked transfers, Wi-Fi vs mobile task limits, speed limit, "download via mobile data", progress + completion notifications, auto-refresh of expired YouTube links. |
+| **Download engine** | Each file is split into 4 MB pieces fetched over up to 8 connections at once, and video and audio download together. Pieces are remembered, so pause, retry or even a killed app resume where they were. Merging runs in-process with Media3 on private storage (a 10-minute 720p video takes a few seconds). Formats are chosen by codec so they can always be saved (H.264 first, AV1 only on Android 14+, VP9 as WebM); if a site still serves one that can't, or a link expires, the page is re-extracted and the download carries on. Queue, Wi-Fi vs mobile task limits, speed limit, notifications. |
 | **Play tab** | Downloading card, downloaded list with filter (music / video / pictures), search, multi-select (share, vault, delete). Item menu: vault, play as audio, convert to audio, share, open with, rename, delete. Remembers playback position. |
 | **Player** | Speed, previous / next, seek, double-tap ±10 s, fullscreen landscape, "All videos" queue, Listen (audio-only) mode, shuffle / repeat, mini player, lock-screen and notification controls. |
 | **In-app updates** | New releases are announced inside the app with their release notes. One tap downloads, verifies (SHA-256 and the same signing key) and installs the update; Android asks once for the "install unknown apps" permission. |
@@ -75,6 +78,19 @@ On-device check against yt-dlp's own example URLs for 118 popular sites (`SiteSu
 
 ```bash
 ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=com.edureminder.quicktube.SiteSupportTest
+```
+
+End-to-end check of the real share flow on a release build (R8 and resource shrinking on, like a published
+APK): `scripts/share_bot.py` sends each link the way an app's Share button does, picks a format in the sheet,
+waits for the download and checks the file with ffprobe and a full ffmpeg decode. Put one `name<TAB>url` per line
+in a text file (copy links with each app's Share → Copy link):
+
+```bash
+./gradlew :app:installQa
+```
+
+```bash
+python3 scripts/share_bot.py links.txt --fresh --report bot-report.json
 ```
 
 Last run: 34/118 downloaded end to end. Failures broke down as: dead or removed example links (17), region/IP blocks (13),

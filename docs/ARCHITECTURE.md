@@ -16,7 +16,7 @@ core/
   datastore              DataStore-backed settings
   extractor              MediaExtractor interface + NewPipe implementation, WebMediaFinder (FB/TikTok/X/OG tags)
   data                   Repository interfaces + implementations (the only thing features talk to)
-  download               DownloadManager: queue, chunked/resumable HTTP, MediaMuxer merge, foreground service
+  download               DownloadManager: queue, parallel ranged HTTP, Media3 merge/remux, foreground service
   media                  PlaybackService (Media3 session), PlayerController, chunked YouTube DataSource
   playerui               VideoPlayerBox, seek bar, speed menu, fullscreen helper
   downloadsheet          App-wide "Download video as" sheet (used by every screen + the share popup)
@@ -55,7 +55,11 @@ feature/
 
 - **Download**: screen → `DownloadSheetController.open(url)` → `DownloadSheetViewModel` resolves formats
   (`MediaRepository` for YouTube etc., `WebMediaFinder` for other pages) → `DownloadManager.enqueue` → Room row →
-  `DownloadEngine` worker (4 MB range chunks, resume from `.part`, refresh expired links) → optional `MediaMerger` → media scan → notification.
+  `DownloadEngine` worker (video + audio at once, each in 4 MB ranges over up to 8 connections, chunk map in `.part.chunks`,
+  re-extract on expired links or unsavable codecs) → `MediaMerger` (Media3 extractors + MP4 muxer in-process, platform muxer for
+  WebM / as fallback) on app-private storage → moved to the download folder → media scan → notification.
+- **Batch download**: playlist/channel page → `BatchDownloader` (app-wide) resolves each video's formats a few at a time and enqueues
+  the closest match to the chosen quality.
 - **Share from another app**: `ShareActivity` (translucent, own task) → same sheet → finishes when the sheet closes.
 - **Playback**: `PlayerController.play(items)` → `MediaController` → `PlaybackService` (ExoPlayer). Separate video+audio URLs
   are played with a `MergingMediaSource`. YouTube's CDN gets bounded range requests via `ChunkedHttpDataSource`, because open-ended reads are throttled.

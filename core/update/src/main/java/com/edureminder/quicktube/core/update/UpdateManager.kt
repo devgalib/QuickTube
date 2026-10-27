@@ -64,7 +64,7 @@ class UpdateManager(
         if (isDebuggable && !force) return
         if (System.currentTimeMillis() - prefs.getLong(KEY_LAST_CHECK, 0) < CHECK_INTERVAL_MS && !force) {
             // Still remind about an update that was found recently (and not skipped).
-            prefs.getString(KEY_CACHED, null)?.let(UpdateParsing::parseRelease)?.takeIf(::isWanted)?.let(::offer)
+            prefs.getString(KEY_CACHED, null)?.let(::parse)?.takeIf(::isWanted)?.let(::offer)
             return
         }
         check(userInitiated = false)
@@ -80,7 +80,7 @@ class UpdateManager(
                     .execute().use { r -> if (r.isSuccessful) r.body.string() else null }
             }.getOrNull()
             prefs.edit().putLong(KEY_LAST_CHECK, System.currentTimeMillis()).apply()
-            val info = json?.let(UpdateParsing::parseRelease)
+            val info = json?.let(::parse)
             if (json != null) prefs.edit().putString(KEY_CACHED, json).apply()
             when {
                 info != null && info.versionCode > currentVersionCode && (userInitiated || isWanted(info)) -> offer(info)
@@ -89,6 +89,34 @@ class UpdateManager(
                 else -> _state.value = UpdateState.Idle
             }
         }
+    }
+
+    private fun parse(json: String) = UpdateParsing.parseRelease(json, Build.SUPPORTED_ABIS.toList())
+
+    /**
+     * Deletes downloaded update APKs once that version (or a newer one) is installed, like the Play Store does.
+     * Runs right after the update ([UpdateCleanupReceiver]) and on every start. Only touches the update cache:
+     * downloads, history and settings live elsewhere and are kept.
+     */
+    fun cleanUpInstalledUpdates() {
+        val installed = currentVersionCode
+        File(context.cacheDir, "updates").listFiles()?.forEach { f ->
+            val code = Regex("^QuickTube-(\\d+)\\.apk").find(f.name)?.groupValues?.get(1)?.toLongOrNull()
+            if (code == null || code <= installed) f.delete()
+        }
+        // Forget a release we already have, so it's never offered again.
+        prefs.getString(KEY_CACHED, null)?.let(::parse)?.takeIf { it.versionCode <= installed }?.let {
+            prefs.edit().remove(KEY_CACHED).apply()
+        }
+    }
+
+    /** The version name once, on the first start after an update (for an "Updated to …" note), else null. */
+    fun consumeJustUpdated(): String? {
+        val installed = currentVersionCode
+        val last = prefs.getLong(KEY_LAST_RUN, 0)
+        if (last == installed) return null
+        prefs.edit().putLong(KEY_LAST_RUN, installed).apply()
+        return currentVersionName.takeIf { last in 1 until installed }
     }
 
     private fun isWanted(info: UpdateInfo) =
@@ -227,6 +255,7 @@ class UpdateManager(
         private const val KEY_LAST_CHECK = "last_check"
         private const val KEY_SKIPPED = "skipped_version"
         private const val KEY_CACHED = "cached_release"
+        private const val KEY_LAST_RUN = "last_run_version"
         private const val CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
     }
 }

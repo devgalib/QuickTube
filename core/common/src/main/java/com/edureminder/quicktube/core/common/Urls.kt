@@ -50,8 +50,26 @@ object Urls {
     }
 
     /** Characters that are not allowed in file names on Android storage. */
-    fun safeFileName(name: String, max: Int = 120): String =
-        name.replace(Regex("""[\\/:*?"<>|\n\r\t]"""), "_").trim().take(max).ifBlank { "download" }
+    /**
+     * A file name from a title. Android allows 255 *bytes* per name and Bengali/emoji take 3–4 bytes per
+     * character, so it's cut by UTF-8 size (never inside a character), leaving room for " (2)", the quality
+     * and the temporary ".part.chunks.tmp" suffixes.
+     */
+    fun safeFileName(name: String, maxBytes: Int = 150): String {
+        val clean = name.replace(Regex("""[\\/:*?"<>|\n\r\t]"""), "_").trim()
+        val out = StringBuilder()
+        var bytes = 0
+        var i = 0
+        while (i < clean.length) {
+            val cp = clean.codePointAt(i)
+            val size = String(Character.toChars(cp)).toByteArray(Charsets.UTF_8).size
+            if (bytes + size > maxBytes) break
+            out.appendCodePoint(cp)
+            bytes += size
+            i += Character.charCount(cp)
+        }
+        return out.toString().trimEnd(' ', '.', '_').ifBlank { "download" }
+    }
 
     private val ytId = Regex("""(?:youtube\.com/(?:watch\?(?:.*&)?v=|shorts/|live/|embed/|v/)|youtu\.be/)([A-Za-z0-9_-]{11})""")
 

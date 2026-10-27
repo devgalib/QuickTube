@@ -15,6 +15,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.async
 
 data class SheetUi(
     val loading: Boolean = true,
@@ -37,8 +40,43 @@ class DownloadSheetViewModel(
     private val resolver: StreamResolver,
     private val universal: UniversalExtractor,
     private val analytics: com.edureminder.quicktube.core.analytics.Analytics,
+    private val http: okhttp3.OkHttpClient,
 ) : ViewModel() {
     private val _ui = MutableStateFlow(SheetUi())
+
+    init {
+        // Every format shows its size: ask the server for any the site didn't report (one tiny request each).
+        viewModelScope.launch {
+            _ui.collect { s ->
+                val missing = s.options.filter { it.protocol == com.edureminder.quicktube.core.model.StreamProtocol.HTTP &&
+                    (it.sizeBytes <= 0 || it.audioUrl != null && it.audioSizeBytes <= 0) && it.id !in sizeChecked }
+                if (missing.isEmpty()) return@collect
+                sizeChecked += missing.map { it.id }
+                val sized = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    missing.map { o ->
+                        async {
+                            o.copy(
+                                sizeBytes = o.sizeBytes.takeIf { it > 0 } ?: remoteSize(o.url, s.headers),
+                                audioSizeBytes = o.audioUrl?.let { u -> o.audioSizeBytes.takeIf { it > 0 } ?: remoteSize(u, s.headers) }
+                                    ?: o.audioSizeBytes,
+                            )
+                        }
+                    }.awaitAll().associateBy { it.id }
+                }
+                _ui.update { cur -> cur.copy(options = cur.options.map { sized[it.id] ?: it }) }
+            }
+        }
+    }
+
+    private val sizeChecked = mutableSetOf<String>()
+
+    private fun remoteSize(url: String, headers: Map<String, String>): Long = runCatching {
+        val req = okhttp3.Request.Builder().url(url).header("Range", "bytes=0-0")
+            .apply { headers.forEach { (k, v) -> header(k, v) } }.build()
+        http.newBuilder().callTimeout(6, java.util.concurrent.TimeUnit.SECONDS).build().newCall(req).execute().use { r ->
+            r.header("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: r.body.contentLength().takeIf { r.code == 200 }
+        } ?: -1L
+    }.getOrDefault(-1L)
     val ui: StateFlow<SheetUi> = _ui
     private var job: Job? = null
     private var loadedFor: SheetTarget? = null
@@ -104,15 +142,29 @@ class DownloadSheetViewModel(
     }
 
     private suspend fun loadWebPage(url: String): SheetUi {
+        val started = System.currentTimeMillis()
+        fun timing(stage: String) = android.util.Log.i("SheetTiming", "$stage at ${System.currentTimeMillis() - started} ms")
+        // Facebook: its own reader gives every resolution; the generic page reader would only find SD/HD.
+        if (com.edureminder.quicktube.core.extractor.FacebookReader.isFacebook(url)) {
+            val fb = universal.extract(url)
+            timing("facebook (${fb?.options?.size ?: -1} options)")
+            if (fb != null && fb.options.isNotEmpty()) return SheetUi(
+                loading = false, title = fb.title, thumbnail = fb.thumbnail, pageUrl = url, options = fb.options, headers = fb.headers,
+                durationSec = fb.durationSec?.toLong() ?: -1,
+            )
+        }
         val page = web.find(url)
+        timing("page read (${page?.candidates?.size ?: -1} candidates)")
         val r = if (page != null && page.candidates.isNotEmpty()) resolver.resolveWithReport(page.candidates, page.headers, page.durationSec)
         else StreamResolver.Result(emptyList(), listOf("page: " + if (page == null) "couldn't load" else "no video data"))
+        timing("resolved (${r.options.size} options)")
         if (r.options.isNotEmpty() && page != null) return SheetUi(
             loading = false, title = page.title, thumbnail = page.thumbnail, pageUrl = url, options = r.options, headers = page.headers,
             durationSec = page.durationSec?.toLong() ?: -1, report = r.report,
         )
         // Fall back to the site-specific engine (1800+ sites).
         val x = universal.extract(url)
+        timing("yt-dlp (${x?.options?.size ?: -1} options)")
         val report = r.report + "yt-dlp → " + (x?.let { "${it.options.size} formats" } ?: "no result")
         if (x != null && x.options.isNotEmpty()) return SheetUi(
             loading = false, title = x.title, thumbnail = x.thumbnail, pageUrl = url, options = x.options, headers = x.headers,
@@ -130,32 +182,20 @@ class DownloadSheetViewModel(
         load(t)
     }
 
+    /** The same video in this quality already downloaded or downloading (for the "download again?" question). */
+    suspend fun existing(option: DownloadOption): com.edureminder.quicktube.core.model.DownloadTask? {
+        val s = _ui.value
+        return runCatching { downloads.findExisting(option.toRequest(s.title, s.pageUrl, s.thumbnail, s.durationSec, s.headers)) }.getOrNull()
+    }
+
     fun download(option: DownloadOption) {
         val s = _ui.value
         analytics.event(
             com.edureminder.quicktube.core.analytics.Events.DOWNLOAD_STARTED,
             mapOf("kind" to option.kind.name.lowercase(), "protocol" to option.protocol.name.lowercase(), "audio_only" to option.extractAudio),
         )
-        viewModelScope.launch {
-            downloads.enqueue(
-                DownloadRequest(
-                    title = s.title.ifBlank { "video" },
-                    url = option.url,
-                    audioUrl = option.audioUrl,
-                    ext = option.ext,
-                    mimeType = option.mimeType,
-                    pageUrl = s.pageUrl,
-                    thumbnail = s.thumbnail,
-                    quality = if (option.kind == FormatKind.VIDEO && option.height > 0) "${option.height}p"
-                    else option.ext.uppercase() + if (option.bitrate > 0) " ${option.bitrate}K" else "",
-                    sizeBytes = option.sizeBytes,
-                    audioSizeBytes = option.audioSizeBytes,
-                    durationSec = s.durationSec,
-                    headers = s.headers,
-                    protocol = option.protocol,
-                    extractAudio = option.extractAudio,
-                ),
-            )
-        }
+        // Not viewModelScope: the share sheet's activity finishes the moment a format is tapped, which would
+        // cancel the request before it's saved.
+        downloads.submit(option.toRequest(s.title, s.pageUrl, s.thumbnail, s.durationSec, s.headers))
     }
 }

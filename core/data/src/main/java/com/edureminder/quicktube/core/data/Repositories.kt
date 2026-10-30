@@ -5,6 +5,7 @@ import com.edureminder.quicktube.core.model.Bookmark
 import com.edureminder.quicktube.core.model.ChannelDetails
 import com.edureminder.quicktube.core.model.Comment
 import com.edureminder.quicktube.core.model.DownloadTask
+import com.edureminder.quicktube.core.model.GalleryLibrary
 import com.edureminder.quicktube.core.model.HistoryEntry
 import com.edureminder.quicktube.core.model.MediaItem
 import com.edureminder.quicktube.core.model.MediaSection
@@ -14,6 +15,7 @@ import com.edureminder.quicktube.core.model.SearchFilter
 import com.edureminder.quicktube.core.model.Site
 import com.edureminder.quicktube.core.model.VideoDetails
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 
 interface MediaRepository {
     suspend fun suggestions(query: String): List<String>
@@ -75,4 +77,12 @@ interface SearchHistoryRepository {
     suspend fun add(query: String)
     suspend fun remove(query: String)
     suspend fun clear()
+}
+
+/** Photos and videos on the device (MediaStore). Loaded in pages, kept fresh by a content observer. */
+interface GalleryRepository {
+    /** Null until the first page has loaded; afterwards grows page by page until [GalleryLibrary.complete]. */
+    val library: StateFlow<GalleryLibrary?>
+    /** Starts loading (if not yet) and watching for changes. Call again after permissions change. */
+    fun load(force: Boolean = false)
 }

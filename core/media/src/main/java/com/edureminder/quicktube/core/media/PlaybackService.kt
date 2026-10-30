@@ -46,6 +46,7 @@ class PlaybackService : MediaSessionService() {
         val launch = packageManager.getLaunchIntentForPackage(packageName)!!
             .putExtra("open", "player")
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        exo = player
         session = MediaSession.Builder(this, player)
             .setSessionActivity(PendingIntent.getActivity(this, 7, launch, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT))
             .setCallback(object : MediaSession.Callback {
@@ -74,6 +75,7 @@ class PlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        exo = null
         session?.run {
             player.release()
             release()
@@ -102,6 +104,13 @@ class PlaybackService : MediaSessionService() {
     }
 
     companion object {
+        /**
+         * The service's player, for the few things a MediaController can't do (pause at the end of each item, side-loaded
+         * subtitles, the audio session for an equalizer). Same process only; null while the service isn't running.
+         */
+        @Volatile
+        internal var exo: ExoPlayer? = null
+
         const val EXTRA_AUDIO_URI = "audio_uri"
         const val EXTRA_ID = "item_id"
         const val EXTRA_IS_VIDEO = "is_video"

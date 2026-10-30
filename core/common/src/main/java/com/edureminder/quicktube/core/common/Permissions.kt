@@ -29,6 +29,28 @@ object Permissions {
             else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
 
+    /** Reading photos and videos (gallery). Android 14+ also offers "selected photos only". */
+    val galleryRead: Array<String>
+        get() = when {
+            Build.VERSION.SDK_INT >= 34 -> arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
+            )
+            Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+            else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+
+    /** Full gallery access (not just the photos a user picked on Android 14+). */
+    fun galleryFull(context: Context): Boolean = granted(
+        context,
+        if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+        else arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE),
+    )
+
+    /** Android 14+: the user allowed only some photos and videos. */
+    fun galleryPartial(context: Context): Boolean = !galleryFull(context) &&
+        Build.VERSION.SDK_INT >= 34 && granted(context, arrayOf(Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED))
+
     val notifications: Array<String>
         get() = if (Build.VERSION.SDK_INT >= 33) arrayOf(Manifest.permission.POST_NOTIFICATIONS) else emptyArray()
 

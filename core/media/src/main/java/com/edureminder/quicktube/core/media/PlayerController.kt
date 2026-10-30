@@ -9,6 +9,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
+import androidx.media3.common.TrackSelectionOverride
+import androidx.media3.common.text.CueGroup
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
@@ -68,6 +70,10 @@ class PlayerController(private val context: Context) {
     private var connecting = false
     private val pending = mutableListOf<(MediaController) -> Unit>()
 
+    private val _cues = MutableStateFlow("")
+    /** Subtitle text on screen right now (side-loaded or embedded captions), empty when none. */
+    val cues: StateFlow<String> = _cues.asStateFlow()
+
     /** Called by the library so it can remember playback positions. */
     var onPositionSave: ((id: String, positionMs: Long) -> Unit)? = null
 
@@ -114,6 +120,50 @@ class PlayerController(private val context: Context) {
     fun setRepeat(mode: Int) = withController { it.repeatMode = mode }
     fun setShuffle(on: Boolean) = withController { it.shuffleModeEnabled = on }
     fun setAudioOnly(on: Boolean) = withController { setAudioOnlyInternal(it, on) }
+    /** Player volume (0 = muted), independent of the device volume. */
+    fun setVolume(volume: Float) = withController { it.volume = volume }
+
+    /** Live position for smooth progress bars (the controller extrapolates it between updates). */
+    val currentPositionMs: Long get() = _player.value?.currentPosition?.coerceAtLeast(0) ?: 0
+
+    /** Stop at the end of each item instead of moving on ("autoplay off"). */
+    fun setPauseAtEndOfItems(on: Boolean) { PlaybackService.exo?.pauseAtEndOfMediaItems = on }
+
+    /** For an [android.media.audiofx.Equalizer]; 0 when unknown. */
+    val audioSessionId: Int get() = PlaybackService.exo?.audioSessionId ?: 0
+
+    /** Adds a subtitle file (SRT, VTT, SSA…) to the current item and keeps the position. */
+    fun addSubtitle(uri: Uri, mimeType: String) {
+        val exo = PlaybackService.exo ?: return
+        val item = exo.currentMediaItem ?: return
+        val index = exo.currentMediaItemIndex
+        val position = exo.currentPosition
+        val sub = MediaItem.SubtitleConfiguration.Builder(uri).setMimeType(mimeType).setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build()
+        exo.replaceMediaItem(index, item.buildUpon().setSubtitleConfigurations(listOf(sub)).build())
+        exo.seekTo(index, position)
+    }
+
+    data class AudioTrack(val label: String, val group: Int, val track: Int, val selected: Boolean)
+
+    fun audioTracks(): List<AudioTrack> {
+        val p = _player.value ?: return emptyList()
+        return p.currentTracks.groups.withIndex().filter { it.value.type == C.TRACK_TYPE_AUDIO }.flatMap { (g, group) ->
+            (0 until group.length).map { t ->
+                val f = group.getTrackFormat(t)
+                val name = listOfNotNull(f.label, f.language?.let { java.util.Locale.forLanguageTag(it).displayLanguage })
+                    .firstOrNull { it.isNotBlank() } ?: "Track ${g + 1}"
+                val channels = if (f.channelCount > 0) " · ${f.channelCount}ch" else ""
+                AudioTrack(name + channels, g, t, group.isTrackSelected(t))
+            }
+        }
+    }
+
+    fun selectAudioTrack(track: AudioTrack) = withController { c ->
+        val group = c.currentTracks.groups.getOrNull(track.group) ?: return@withController
+        c.trackSelectionParameters = c.trackSelectionParameters.buildUpon()
+            .setOverrideForType(TrackSelectionOverride(group.mediaTrackGroup, track.track))
+            .build()
+    }
 
     fun stop() = withController {
         saveCurrentPosition()
@@ -144,6 +194,9 @@ class PlayerController(private val context: Context) {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val prev = _state.value.current
             if (prev != null) onPositionSave?.invoke(prev.id, 0)
+        }
+        override fun onCues(cueGroup: CueGroup) {
+            _cues.value = cueGroup.cues.mapNotNull { it.text?.toString() }.joinToString("\n")
         }
         override fun onPlayerError(error: PlaybackException) {
             _state.update { it.copy(error = error.errorCodeName.removePrefix("ERROR_CODE_").replace('_', ' ').lowercase()) }

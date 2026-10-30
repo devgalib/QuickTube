@@ -110,6 +110,7 @@ dependencies {
     implementation(projects.feature.browser)
     implementation(projects.feature.settings)
     implementation(projects.feature.tools)
+    implementation(projects.feature.gallery)
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.activity.compose)

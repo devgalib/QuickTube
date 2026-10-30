@@ -51,6 +51,15 @@ import com.edureminder.quicktube.feature.browser.BrowserScreen
 import com.edureminder.quicktube.feature.browser.HistoryScreen
 import com.edureminder.quicktube.feature.browser.SitesScreen
 import com.edureminder.quicktube.feature.home.HomeActions
+import com.edureminder.quicktube.feature.gallery.AlbumScreen
+import com.edureminder.quicktube.feature.gallery.GalleryScreen
+import com.edureminder.quicktube.feature.gallery.ViewerScreen
+import com.edureminder.quicktube.feature.gallery.player.GalleryPlayerScreen
+import com.edureminder.quicktube.core.designsystem.LocalBottomBarHidden
+import com.edureminder.quicktube.core.designsystem.QtEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import com.edureminder.quicktube.feature.settings.AboutScreen
 import com.edureminder.quicktube.feature.settings.DownloadSettingsScreen
 import com.edureminder.quicktube.feature.settings.NotificationSettingsScreen
@@ -81,6 +90,7 @@ import org.koin.compose.koinInject
 private val tabs = listOf(
     NavTab(HomeRoute, "Download", QtIcons.Download, QtIcons.Download),
     NavTab(LibraryRoute, "Play", QtIcons.PlayCircleOutline, QtIcons.PlayCircle),
+    NavTab(GalleryRoute, "Gallery", QtIcons.Gallery, QtIcons.GalleryFilled),
     NavTab(SettingsRoute, "Settings", QtIcons.Settings, QtIcons.SettingsFilled),
 )
 
@@ -91,7 +101,9 @@ fun AppNavHost(nav: NavHostController) {
     val backStack by nav.currentBackStackEntryAsState()
     val dest = backStack?.destination
     val onTab = tabs.any { t -> dest?.hierarchy?.any { it.hasRoute(t.route::class) } == true }
-    val showMini = dest?.let { d -> !d.hasRoute(PlayerRoute::class) && !d.hasRoute(VideoRoute::class) } ?: false
+    val showMini = dest?.let { d -> !d.hasRoute(PlayerRoute::class) && !d.hasRoute(VideoRoute::class) && !d.hasRoute(GalleryViewerRoute::class) && !d.hasRoute(GalleryPlayerRoute::class) } ?: false
+    // A tab screen can swap the floating bar for its own (the gallery's selection actions).
+    val barHidden = remember { mutableStateOf(false) }
     val activeCount by library.downloads.map { l -> l.count { it.status != DownloadStatus.COMPLETED && it.deletedAt == 0L } }
         .collectAsStateWithLifecycle(0)
 
@@ -117,7 +129,7 @@ fun AppNavHost(nav: NavHostController) {
     Box(Modifier.fillMaxSize()) {
         // Tab screens draw behind the floating bar (and see their content through the gaps around it);
         // other screens simply stop above the mini player.
-        CompositionLocalProvider(LocalBottomBarHeight provides if (onTab) overlayHeight else 0.dp) {
+        CompositionLocalProvider(LocalBottomBarHeight provides if (onTab) overlayHeight else 0.dp, LocalBottomBarHidden provides barHidden) {
         NavHost(
             nav, startDestination = HomeRoute, modifier = Modifier.fillMaxSize().padding(bottom = if (onTab) 0.dp else overlayHeight),
             enterTransition = QtTransitions.push,
@@ -159,6 +171,42 @@ fun AppNavHost(nav: NavHostController) {
                     onOpenPlayer = { nav.navigate(PlayerRoute) { launchSingleTop = true } },
                     onOpenSource = ::openUrl,
                 )
+            }
+            composable<GalleryRoute>(
+                enterTransition = QtTransitions.tabEnter, exitTransition = QtTransitions.tabExit,
+                popEnterTransition = QtTransitions.tabEnter, popExitTransition = QtTransitions.tabExit,
+            ) {
+                GalleryScreen(
+                    onOpenAlbum = { nav.navigate(GalleryAlbumRoute(it.bucketId, it.name)) },
+                    onOpenViewer = { nav.navigate(GalleryViewerRoute(it.id)) },
+                    onOpenVideo = { nav.navigate(GalleryPlayerRoute(it.id)) },
+                )
+            }
+            composable<GalleryAlbumRoute> { e ->
+                val r = e.toRoute<GalleryAlbumRoute>()
+                AlbumScreen(
+                    r.bucketId, r.name, onBack = nav::popBackStack,
+                    onOpenViewer = { nav.navigate(GalleryViewerRoute(it.id, r.bucketId)) },
+                    onOpenVideo = { nav.navigate(GalleryPlayerRoute(it.id, r.bucketId)) },
+                )
+            }
+            composable<GalleryViewerRoute>(
+                enterTransition = { fadeIn(tween(220)) + scaleIn(tween(260, easing = QtEasing.EmphasizedDecelerate), initialScale = 0.92f) },
+                exitTransition = { fadeOut(tween(160)) },
+                popEnterTransition = { fadeIn(tween(160)) },
+                popExitTransition = { fadeOut(tween(200)) + scaleOut(tween(220), targetScale = 0.94f) },
+            ) { e ->
+                val r = e.toRoute<GalleryViewerRoute>()
+                ViewerScreen(r.mediaId, r.bucketId, onBack = nav::popBackStack, onOpenVideo = { nav.navigate(GalleryPlayerRoute(it.id, r.bucketId)) })
+            }
+            composable<GalleryPlayerRoute>(
+                enterTransition = { fadeIn(tween(200)) },
+                exitTransition = { fadeOut(tween(150)) },
+                popEnterTransition = { fadeIn(tween(150)) },
+                popExitTransition = { fadeOut(tween(200)) },
+            ) { e ->
+                val r = e.toRoute<GalleryPlayerRoute>()
+                GalleryPlayerScreen(r.mediaId, r.bucketId, onBack = nav::popBackStack)
             }
             composable<SettingsRoute>(
                 enterTransition = QtTransitions.tabEnter, exitTransition = QtTransitions.tabExit,
@@ -243,8 +291,8 @@ fun AppNavHost(nav: NavHostController) {
             Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .onSizeChanged { overlayHeight = with(density) { it.height.toDp() } },
         ) {
-            if (showMini) MiniPlayer(onExpand = { nav.navigate(PlayerRoute) { launchSingleTop = true } })
-            if (onTab) {
+            if (showMini && !barHidden.value) MiniPlayer(onExpand = { nav.navigate(PlayerRoute) { launchSingleTop = true } })
+            if (onTab && !barHidden.value) {
                 val selected = tabs.indexOfFirst { t -> dest?.hierarchy?.any { it.hasRoute(t.route::class) } == true }
                 FloatingNavBar(
                     tabs, selected,
@@ -257,7 +305,7 @@ fun AppNavHost(nav: NavHostController) {
                     },
                     badges = mapOf(1 to activeCount),
                 )
-            } else if (showMini) Spacer(Modifier.navigationBarsPadding().height(8.dp))
+            } else if (showMini && !barHidden.value) Spacer(Modifier.navigationBarsPadding().height(8.dp))
         }
     }
     }

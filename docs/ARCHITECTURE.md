@@ -29,6 +29,7 @@ feature/
   browser                WebView browser with media sniffing, sites, history, saved pages
   settings               Settings + sub-screens
   tools                  Recycle bin, vault, status saver, cleaners, app uninstaller
+  gallery                Gallery tab: photos by month, albums, full-screen viewer (MediaStore via GalleryRepository)
 ```
 
 ## Rules that keep it scalable
@@ -61,6 +62,9 @@ feature/
 - **Batch download**: playlist/channel page → `BatchDownloader` (app-wide) resolves each video's formats a few at a time and enqueues
   the closest match to the chosen quality.
 - **Share from another app**: `ShareActivity` (translucent, own task) → same sheet → finishes when the sheet closes.
+- **Gallery**: `GalleryRepository` (`core:data`) pages the MediaStore Files table newest first (120 rows, then 600 per page)
+  and reloads on a content observer → `GalleryViewModel` builds month sections / albums off the main thread → grids draw
+  MediaStore's cached thumbnails from a small LRU. Videos open in the app's player; deleting goes through the system trash dialog.
 - **Playback**: `PlayerController.play(items)` → `MediaController` → `PlaybackService` (ExoPlayer). Separate video+audio URLs
   are played with a `MergingMediaSource`. YouTube's CDN gets bounded range requests via `ChunkedHttpDataSource`, because open-ended reads are throttled.
 

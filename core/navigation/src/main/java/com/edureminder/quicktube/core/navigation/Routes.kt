@@ -5,6 +5,7 @@ import kotlinx.serialization.Serializable
 // Bottom-bar destinations
 @Serializable data object HomeRoute
 @Serializable data object LibraryRoute
+@Serializable data object GalleryRoute
 @Serializable data object SettingsRoute
 
 // Discover / download
@@ -25,6 +26,14 @@ import kotlinx.serialization.Serializable
 // Library / player
 @Serializable data object DownloadingRoute
 @Serializable data object PlayerRoute
+
+// Gallery
+@Serializable data class GalleryAlbumRoute(val bucketId: Long, val name: String)
+/** Full-screen viewer starting at [mediaId], paging through one album ([bucketId]) or everything ([GALLERY_ALL]). */
+@Serializable data class GalleryViewerRoute(val mediaId: Long, val bucketId: Long = GALLERY_ALL)
+const val GALLERY_ALL = Long.MIN_VALUE
+/** Video player for gallery videos: [mediaId] first, the other videos of the album (or everything) in its strip. */
+@Serializable data class GalleryPlayerRoute(val mediaId: Long, val bucketId: Long = GALLERY_ALL)
 
 // Settings
 @Serializable data object DownloadSettingsRoute

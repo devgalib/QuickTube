@@ -3,6 +3,7 @@ package com.edureminder.quicktube.core.data
 import com.edureminder.quicktube.core.database.databaseModule
 import com.edureminder.quicktube.core.datastore.datastoreModule
 import com.edureminder.quicktube.core.extractor.extractorModule
+import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
 val dataModule = module {
@@ -12,4 +13,5 @@ val dataModule = module {
     single<SettingsRepository> { SettingsRepositoryImpl(get()) }
     single<BrowserRepository> { BrowserRepositoryImpl(get(), get(), get()) }
     single<SearchHistoryRepository> { SearchHistoryRepositoryImpl(get()) }
+    single<GalleryRepository> { MediaStoreGalleryRepository(androidContext()) }
 }

@@ -199,3 +199,11 @@ fun HSpace(w: Int) = Spacer(Modifier.width(w.dp))
  * Scrolling containers on tab screens add it as bottom content padding so their last item stays reachable.
  */
 val LocalBottomBarHeight = androidx.compose.runtime.compositionLocalOf { 0.dp }
+
+/**
+ * Set to true by a tab screen that shows its own bar in place of the floating tab bar (e.g. selection actions).
+ * The screen must set it back to false when it leaves that mode or the composition.
+ */
+val LocalBottomBarHidden = androidx.compose.runtime.staticCompositionLocalOf<androidx.compose.runtime.MutableState<Boolean>> {
+    androidx.compose.runtime.mutableStateOf(false)
+}

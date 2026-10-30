@@ -24,6 +24,13 @@ ICONS = {
  "Subtitles":("subtitles",0),"Forward10":("forward_10",0),"Replay10":("replay_10",0),"Pip":("picture_in_picture_alt",0),"Sort":("sort",0),
  "CheckBox":("check_box",1),"CheckBoxBlank":("check_box_outline_blank",0),"Hd":("hd",1),"Schedule":("schedule",0),"DataUsage":("data_usage",0),
  "SignalCellular":("signal_cellular_alt",0),"Restore":("undo",0),"Visibility":("visibility",0),"Copyright":("copyright",0),"Mail":("mail",0),
+ "Gallery":("photo_library",0),"GalleryFilled":("photo_library",1),"Wallpaper":("wallpaper",0),"PhotoAlbum":("photo_album",0),
+ "VolumeUp":("volume_up",0),"VolumeOff":("volume_off",0),"FitScreen":("fit_screen",0),"CropSquare":("square",1),
+ "SlowMotion":("slow_motion_video",0),"ScreenRotation":("screen_rotation_alt",0),"ClosedCaption":("closed_caption",0),
+ "Favorite":("favorite",1),"FavoriteBorder":("favorite",0),"Timer":("timer",0),"Equalizer":("equalizer",0),
+ "ContentCut":("content_cut",0),"HeadsetMic":("headset_mic",0),"FastForward":("fast_forward",1),"FastRewind":("fast_rewind",1),
+ "LightMode":("light_mode",0),"PictureInPicture":("picture_in_picture",0),"Sync":("sync",0),"PlaylistAdd":("playlist_add",0),
+ "Battery":("battery_full",0),"AudioTrack":("mic",0),
 }
 BRANDS = {"YouTube":"youtube","Instagram":"instagram","Facebook":"facebook","TikTok":"tiktok","X":"x","WhatsApp":"whatsapp","Dailymotion":"dailymotion","Vimeo":"vimeo","SoundCloud":"soundcloud","Google":"google"}
 

@@ -229,7 +229,7 @@ fun VideoStrip(queue: List<GalleryMedia>, current: Int, state: LazyListState, on
 @Composable
 fun CenterPlayPause(playing: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, size: Dp = 64.dp) {
     Box(modifier.size(size).clip(CircleShape).pressable(scaleDown = 0.85f, bounded = false, onClick = onClick), contentAlignment = Alignment.Center) {
-        Icon(if (playing) QtIcons.Pause else QtIcons.Play, if (playing) "Pause" else "Play", tint = Color.White, modifier = Modifier.size(size))
+        Icon(if (playing) QtIcons.PPause else QtIcons.PPlay, if (playing) "Pause" else "Play", tint = Color.White, modifier = Modifier.size(size))
     }
 }
 

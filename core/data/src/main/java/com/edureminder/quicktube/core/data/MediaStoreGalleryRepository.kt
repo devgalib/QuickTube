@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 /**
- * Reads images and videos from the MediaStore Files table, newest first, in pages: the first page is small so the
+ * Reads images, videos and audio from the MediaStore Files table, newest first, in pages: the first page is small so the
  * grid shows something at once, later pages are bigger. Only light columns are read; thumbnails come from MediaStore.
  */
 internal class MediaStoreGalleryRepository(context: Context) : GalleryRepository {
@@ -104,6 +104,7 @@ internal class MediaStoreGalleryRepository(context: Context) : GalleryRepository
             val name = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DISPLAY_NAME)
             val size = c.getColumnIndexOrThrow(MediaStore.MediaColumns.SIZE)
             val data = c.getColumnIndexOrThrow(MediaStore.MediaColumns.DATA)
+            val artist = c.getColumnIndexOrThrow(ARTIST)
             while (c.moveToNext()) {
                 val path = c.getStringOrNull(data).orEmpty()
                 val bucketId = c.getLong(bucket)
@@ -111,9 +112,10 @@ internal class MediaStoreGalleryRepository(context: Context) : GalleryRepository
                 val w = c.getInt(width)
                 val h = c.getInt(height)
                 val mod = c.getLong(modified)
+                val kind = c.getInt(type)
                 out += GalleryMedia(
                     id = c.getLong(id),
-                    isVideo = c.getInt(type) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO,
+                    isVideo = kind == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO,
                     mimeType = c.getStringOrNull(mime).orEmpty(),
                     dateMs = c.getLong(taken).takeIf { it > 0 } ?: (mod * 1000),
                     modifiedSec = mod,
@@ -126,6 +128,8 @@ internal class MediaStoreGalleryRepository(context: Context) : GalleryRepository
                     name = c.getStringOrNull(name) ?: path.substringAfterLast('/'),
                     sizeBytes = c.getLong(size),
                     path = path,
+                    isAudio = kind == MediaStore.Files.FileColumns.MEDIA_TYPE_AUDIO,
+                    artist = c.getStringOrNull(artist)?.takeUnless { it == MediaStore.UNKNOWN_STRING }.orEmpty(),
                 )
             }
             out to unlimited
@@ -162,14 +166,15 @@ internal class MediaStoreGalleryRepository(context: Context) : GalleryRepository
         const val ORIENTATION = "orientation"
         const val BUCKET_ID = "bucket_id"
         const val BUCKET_NAME = "bucket_display_name"
+        const val ARTIST = "artist"
         val SELECTION = "${MediaStore.Files.FileColumns.MEDIA_TYPE} IN (${MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE}, " +
-            "${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO}) AND ${MediaStore.MediaColumns.SIZE} > 0"
+            "${MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO}, ${MediaStore.Files.FileColumns.MEDIA_TYPE_AUDIO}) AND ${MediaStore.MediaColumns.SIZE} > 0"
         @Suppress("DEPRECATION")
         val PROJECTION = arrayOf(
             MediaStore.MediaColumns._ID, MediaStore.Files.FileColumns.MEDIA_TYPE, MediaStore.MediaColumns.MIME_TYPE, DATE_TAKEN,
             MediaStore.MediaColumns.DATE_MODIFIED, DURATION, MediaStore.MediaColumns.WIDTH, MediaStore.MediaColumns.HEIGHT,
             ORIENTATION, BUCKET_ID, BUCKET_NAME, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.SIZE,
-            MediaStore.MediaColumns.DATA,
+            MediaStore.MediaColumns.DATA, ARTIST,
         )
     }
 }

@@ -19,7 +19,8 @@ object GalleryActions {
         val uris = items.map { it.uri }
         val type = when {
             items.all { it.isVideo } -> "video/*"
-            items.none { it.isVideo } -> "image/*"
+            items.all { it.isAudio } -> "audio/*"
+            items.all { it.isPhoto } -> "image/*"
             else -> "*/*"
         }
         val send = if (uris.size == 1) Intent(Intent.ACTION_SEND).putExtra(Intent.EXTRA_STREAM, uris[0])

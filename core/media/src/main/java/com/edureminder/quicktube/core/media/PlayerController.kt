@@ -56,6 +56,10 @@ data class PlaybackState(
     val error: String? = null,
     val videoWidth: Int = 0,
     val videoHeight: Int = 0,
+    /** The error is the phone not handling this file's format (container or codec), not a temporary failure. */
+    val unsupported: Boolean = false,
+    /** The file has video but this phone can't decode it (e.g. MPEG-2 on some phones): only the sound would play. */
+    val videoUnsupported: Boolean = false,
 )
 
 /** App-side handle to [PlaybackService]; UI observes [state] and renders [player]. */
@@ -113,9 +117,17 @@ class PlayerController(private val context: Context) {
     fun resume() = withController { it.play() }
     fun seekTo(ms: Long) = withController { it.seekTo(ms) }
     fun seekBy(deltaMs: Long) = withController { it.seekTo((it.currentPosition + deltaMs).coerceAtLeast(0)) }
-    fun next() = withController { if (it.hasNextMediaItem()) it.seekToNextMediaItem() }
-    fun previous() = withController { if (it.currentPosition > 3000 || !it.hasPreviousMediaItem()) it.seekTo(0) else it.seekToPreviousMediaItem() }
-    fun skipTo(index: Int) = withController { it.seekToDefaultPosition(index); it.play() }
+    fun next() = withController { if (it.hasNextMediaItem()) { it.seekToNextMediaItem(); recover(it) } }
+    fun previous() = withController {
+        if (it.currentPosition > 3000 || !it.hasPreviousMediaItem()) it.seekTo(0) else it.seekToPreviousMediaItem()
+        recover(it)
+    }
+    fun skipTo(index: Int) = withController { it.seekToDefaultPosition(index); recover(it); it.play() }
+
+    /** After a file failed to play the player sits idle; moving to another item has to prepare it again. */
+    private fun recover(c: MediaController) {
+        if (c.playbackState == Player.STATE_IDLE) { _state.update { it.copy(error = null) }; c.prepare() }
+    }
     fun setSpeed(speed: Float) = withController { it.playbackParameters = PlaybackParameters(speed) }
     fun setRepeat(mode: Int) = withController { it.repeatMode = mode }
     fun setShuffle(on: Boolean) = withController { it.shuffleModeEnabled = on }
@@ -199,7 +211,7 @@ class PlayerController(private val context: Context) {
             _cues.value = cueGroup.cues.mapNotNull { it.text?.toString() }.joinToString("\n")
         }
         override fun onPlayerError(error: PlaybackException) {
-            _state.update { it.copy(error = error.errorCodeName.removePrefix("ERROR_CODE_").replace('_', ' ').lowercase()) }
+            _state.update { it.copy(error = error.errorCodeName.removePrefix("ERROR_CODE_").replace('_', ' ').lowercase(), unsupported = error.errorCode in UNSUPPORTED) }
         }
     }
 
@@ -222,6 +234,11 @@ class PlayerController(private val context: Context) {
                 videoWidth = vs.width,
                 videoHeight = vs.height,
                 error = if (p.playerError == null) null else it.error,
+                unsupported = p.playerError != null && it.unsupported,
+                videoUnsupported = p.currentTracks.groups.let { g ->
+                    g.any { it.type == C.TRACK_TYPE_VIDEO } && g.none { it.type == C.TRACK_TYPE_VIDEO && it.isSupported(true) }
+                    // (true: a video above the decoder's rated size, like 4K, still plays.)
+                },
             )
         }
     }
@@ -257,5 +274,15 @@ class PlayerController(private val context: Context) {
                     .build(),
             )
             .build()
+    }
+
+    private companion object {
+        val UNSUPPORTED = setOf(
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
+            PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,
+            PlaybackException.ERROR_CODE_DECODER_INIT_FAILED,
+            PlaybackException.ERROR_CODE_DECODING_FAILED,
+        )
     }
 }

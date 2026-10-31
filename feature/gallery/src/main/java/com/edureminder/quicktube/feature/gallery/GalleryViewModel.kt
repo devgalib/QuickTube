@@ -23,7 +23,7 @@ data class GalleryUi(
     val albums: List<GalleryAlbum> = emptyList(),
 )
 
-/** One per gallery screen: everything ([GALLERY_ALL]) or one album ([bucketId]). Sections are built off the main thread. */
+/** One per gallery screen: the Photos tab ([GALLERY_ALL]), a virtual album or one folder ([bucketId]). Sections are built off the main thread. */
 @OptIn(ExperimentalCoroutinesApi::class)
 class GalleryViewModel(
     private val bucketId: Long,
@@ -32,13 +32,13 @@ class GalleryViewModel(
 
     val ui: StateFlow<GalleryUi> = repo.library.filterNotNull()
         .mapLatest { lib ->
-            val items = if (bucketId == GALLERY_ALL) lib.items else lib.items.filter { it.bucketId == bucketId }
+            val items = GallerySections.filter(lib.items, bucketId)
             GalleryUi(
                 loaded = true,
                 complete = lib.complete,
                 items = items,
                 entries = GallerySections.build(items),
-                albums = if (bucketId == GALLERY_ALL) GallerySections.albums(items) else emptyList(),
+                albums = if (bucketId == GALLERY_ALL) GallerySections.virtualAlbums(lib.items) + GallerySections.albums(items) else emptyList(),
             )
         }
         .flowOn(Dispatchers.Default)

@@ -29,14 +29,16 @@ object Permissions {
             else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
 
-    /** Reading photos and videos (gallery). Android 14+ also offers "selected photos only". */
+    /** Reading photos, videos and audio (gallery). Android 14+ also offers "selected photos only". */
     val galleryRead: Array<String>
         get() = when {
             Build.VERSION.SDK_INT >= 34 -> arrayOf(
-                Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO,
+                Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_AUDIO,
                 Manifest.permission.READ_MEDIA_VISUAL_USER_SELECTED,
             )
-            Build.VERSION.SDK_INT >= 33 -> arrayOf(Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO)
+            Build.VERSION.SDK_INT >= 33 -> arrayOf(
+                Manifest.permission.READ_MEDIA_IMAGES, Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_AUDIO,
+            )
             else -> arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
         }
 

@@ -1,6 +1,10 @@
 package com.edureminder.quicktube.feature.gallery
 
 import com.edureminder.quicktube.core.model.GalleryMedia
+import com.edureminder.quicktube.core.navigation.GALLERY_ALL
+import com.edureminder.quicktube.core.navigation.GALLERY_AUDIOS
+import com.edureminder.quicktube.core.navigation.GALLERY_PHOTOS
+import com.edureminder.quicktube.core.navigation.GALLERY_VIDEOS
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -12,8 +16,10 @@ import java.util.Locale
 class GallerySectionsTest {
     private val zone = ZoneId.of("Asia/Dhaka")
 
-    private fun media(id: Long, date: LocalDateTime, bucket: Long = 1, name: String = "Camera") = GalleryMedia(
-        id = id, isVideo = false, mimeType = "image/jpeg", dateMs = date.atZone(zone).toInstant().toEpochMilli(), modifiedSec = 0,
+    private fun media(
+        id: Long, date: LocalDateTime, bucket: Long = 1, name: String = "Camera", video: Boolean = false, audio: Boolean = false,
+    ) = GalleryMedia(
+        id = id, isVideo = video, isAudio = audio, mimeType = "image/jpeg", dateMs = date.atZone(zone).toInstant().toEpochMilli(), modifiedSec = 0,
         durationMs = 0, width = 100, height = 100, bucketId = bucket, bucketName = name, name = "$id.jpg", sizeBytes = 1, path = "",
     )
 
@@ -63,7 +69,7 @@ class GallerySectionsTest {
         val albums = GallerySections.albums(items)
         assertEquals(listOf(7L, 1L), albums.map { it.bucketId })
         assertEquals(listOf(2, 1), albums.map { it.count })
-        assertEquals(1L, albums[0].cover.id)
+        assertEquals(1L, albums[0].cover?.id)
     }
 
     @Test
@@ -82,5 +88,40 @@ class GallerySectionsTest {
         assertEquals(setOf(5L), GallerySelection.dragRange(emptySet(), items, anchor = 5, current = 5))
         // Positions past the end are clamped.
         assertEquals(setOf(8L, 9L), GallerySelection.dragRange(emptySet(), items, anchor = 8, current = 42))
+    }
+
+    private val day = LocalDateTime.of(2026, 10, 30, 9, 0)
+    private val mixed = listOf(
+        media(1, day, bucket = 1),
+        media(2, day, bucket = 1, video = true),
+        media(3, day, bucket = 2, video = true),
+        media(4, day, bucket = 1, audio = true),
+        media(5, day, bucket = 3, audio = true),
+    )
+
+    @Test
+    fun `photos tab and folders leave audio out, virtual albums take one kind from every folder`() {
+        assertEquals(listOf(1L, 2L, 3L), GallerySections.filter(mixed, GALLERY_ALL).map { it.id })
+        assertEquals(listOf(1L, 2L), GallerySections.filter(mixed, 1).map { it.id })
+        assertEquals(listOf(1L), GallerySections.filter(mixed, GALLERY_PHOTOS).map { it.id })
+        assertEquals(listOf(2L, 3L), GallerySections.filter(mixed, GALLERY_VIDEOS).map { it.id })
+        assertEquals(listOf(4L, 5L), GallerySections.filter(mixed, GALLERY_AUDIOS).map { it.id })
+    }
+
+    @Test
+    fun `virtual albums count each kind and audio-only folders are not albums`() {
+        val virtual = GallerySections.virtualAlbums(mixed)
+        assertEquals(listOf(GALLERY_PHOTOS, GALLERY_VIDEOS, GALLERY_AUDIOS), virtual.map { it.bucketId })
+        assertEquals(listOf(1, 2, 2), virtual.map { it.count })
+        assertTrue(virtual.all { it.virtual })
+        assertEquals(listOf(1L, 2L), GallerySections.albums(mixed).map { it.bucketId })
+    }
+
+    @Test
+    fun `player queue is the opened file's own folder and kind`() {
+        val video = mixed.first { it.id == 2L }
+        assertEquals(listOf(2L), GallerySections.folderQueue(mixed, video).map { it.id })
+        val audio = mixed.first { it.id == 4L }
+        assertEquals(listOf(4L), GallerySections.folderQueue(mixed, audio).map { it.id })
     }
 }

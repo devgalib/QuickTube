@@ -38,6 +38,7 @@ import com.edureminder.quicktube.core.designsystem.pressable
 import com.edureminder.quicktube.core.media.PlaybackState
 import com.edureminder.quicktube.core.media.PlayerController
 import com.edureminder.quicktube.core.model.GalleryMedia
+import com.edureminder.quicktube.feature.gallery.AudioArt
 import com.edureminder.quicktube.feature.gallery.GalleryThumbnail
 
 private val Glass = Color.White.copy(alpha = 0.16f)
@@ -54,6 +55,7 @@ fun AudioModeScreen(
     ui: GalleryPlayerUi,
     controller: PlayerController,
     onBackToVideo: () -> Unit,
+    onClose: () -> Unit,
     onToMp3: () -> Unit,
     onFavorite: () -> Unit,
     onMode: () -> Unit,
@@ -67,12 +69,24 @@ fun AudioModeScreen(
         )
         Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.28f)))
         Column(Modifier.fillMaxSize().statusPadding().navigationBarsPadding()) {
-            Spacer(Modifier.height(39.dp))
+            if (media.isAudio) {
+                // An audio file has no video to go back to: a chevron closes the player instead.
+                Box(
+                    Modifier.padding(start = 10.dp, top = 4.dp).size(44.dp).clip(CircleShape).pressable(onClick = onClose),
+                    contentAlignment = Alignment.Center,
+                ) { Icon(QtIcons.PDown, "Close", tint = Color.White, modifier = Modifier.size(30.dp)) }
+                Spacer(Modifier.height(8.dp))
+            } else Spacer(Modifier.height(39.dp))
             Box(
                 Modifier.padding(horizontal = 22.dp).fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(18.dp)).background(Glass),
-            ) { GalleryThumbnail(media, Modifier.fillMaxSize(), sizePx = 720) }
+            ) {
+                if (media.isAudio) AudioArt(media, Modifier.fillMaxSize(), sizePx = 720, iconSize = 96.dp)
+                else GalleryThumbnail(media, Modifier.fillMaxSize(), sizePx = 720)
+            }
             Spacer(Modifier.height(25.dp))
-            LazyRow(contentPadding = PaddingValues(horizontal = 22.dp), horizontalArrangement = Arrangement.spacedBy(17.dp)) {
+            if (media.isAudio) {
+                if (media.artist.isNotBlank()) Text(media.artist, color = Color.White.copy(alpha = 0.75f), fontSize = 15.sp, modifier = Modifier.padding(horizontal = 22.dp))
+            } else LazyRow(contentPadding = PaddingValues(horizontal = 22.dp), horizontalArrangement = Arrangement.spacedBy(17.dp)) {
                 item { Chip(QtIcons.Videocam, "Back", onBackToVideo) }
                 item { Chip(QtIcons.Sync, "Video to MP3", onToMp3) }
             }
@@ -85,7 +99,7 @@ fun AudioModeScreen(
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) Box(
                     Modifier.padding(start = 12.dp).size(36.dp).clip(CircleShape).background(Glass).pressable(onClick = onFavorite),
                     contentAlignment = Alignment.Center,
-                ) { Icon(if (ui.favorite) QtIcons.Favorite else QtIcons.FavoriteBorder, "Favorite", tint = Color.White, modifier = Modifier.size(22.dp)) }
+                ) { Icon(if (ui.favorite) QtIcons.PFavorite else QtIcons.PFavoriteBorder, "Favorite", tint = Color.White, modifier = Modifier.size(22.dp)) }
             }
             Spacer(Modifier.height(40.dp))
             PillSeekBar(position, state.durationMs, controller::seekTo, Modifier.fillMaxWidth().padding(horizontal = 30.dp))
@@ -97,10 +111,10 @@ fun AudioModeScreen(
             Spacer(Modifier.height(20.dp))
             Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Transport(modeIcon(ui.mode), ui.mode.label, 24.dp, onMode)
-                Transport(QtIcons.SkipPrevious, "Previous", 40.dp, controller::previous)
-                Transport(if (state.isPlaying) QtIcons.Pause else QtIcons.Play, "Play", 56.dp, controller::togglePlay)
-                Transport(QtIcons.SkipNext, "Next", 40.dp, controller::next)
-                Transport(QtIcons.MoreVert, "More", 24.dp, onMore)
+                Transport(QtIcons.PSkipPrevious, "Previous", 40.dp, controller::previous)
+                Transport(if (state.isPlaying) QtIcons.PPause else QtIcons.PPlay, "Play", 56.dp, controller::togglePlay)
+                Transport(QtIcons.PSkipNext, "Next", 40.dp, controller::next)
+                Transport(QtIcons.PMore, "More", 24.dp, onMore)
             }
             Spacer(Modifier.height(4.dp))
         }
@@ -146,13 +160,13 @@ fun AudioMoreSheet(
         }
         Text(media.name, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Medium, maxLines = 1, modifier = Modifier.padding(start = 24.dp, top = 22.dp, end = 24.dp))
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 22.dp)) {
-            Round(QtIcons.Equalizer, "Equalizer", onEqualizer)
-            Round(QtIcons.Timer, "Timer", onTimer)
-            Round(QtIcons.SlowMotion, "Speed", onSpeed)
-            Round(QtIcons.Share, "Share", onShare)
+            Round(QtIcons.PEqualizer, "Equalizer", onEqualizer)
+            Round(QtIcons.PTimer, "Timer", onTimer)
+            Round(QtIcons.PSpeed, "Speed", onSpeed)
+            Round(QtIcons.PShare, "Share", onShare)
         }
-        ListRow(QtIcons.Info, "Info", onInfo)
-        ListRow(QtIcons.Delete, "Delete", onDelete)
+        ListRow(QtIcons.PInfo, "Info", onInfo)
+        ListRow(QtIcons.PDelete, "Delete", onDelete)
         Spacer(Modifier.height(16.dp))
     }
 }

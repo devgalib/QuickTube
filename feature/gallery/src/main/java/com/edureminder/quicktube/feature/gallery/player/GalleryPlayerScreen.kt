@@ -24,6 +24,10 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -60,6 +64,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,6 +78,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -82,6 +97,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.edureminder.quicktube.core.designsystem.icon.QtIcons
+import com.edureminder.quicktube.core.designsystem.pressable
 import com.edureminder.quicktube.core.media.PlayerController
 import com.edureminder.quicktube.core.model.GalleryMedia
 import com.edureminder.quicktube.feature.gallery.GalleryActions
@@ -93,7 +109,7 @@ import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.parameter.parametersOf
 import kotlin.math.roundToInt
 
-private enum class Sheet { SPEED, MORE, SUBTITLE, AUDIO_TRACK, EQUALIZER, AUDIO_MORE }
+private enum class Sheet { SPEED, MORE, SUBTITLE, AUDIO_TRACK, EQUALIZER, AUDIO_MORE, INFO }
 
 private val TopBarHeight = 47.dp
 
@@ -104,8 +120,8 @@ private val TopBarHeight = 47.dp
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun GalleryPlayerScreen(mediaId: Long, bucketId: Long, onBack: () -> Unit) {
-    val vm = koinViewModel<GalleryPlayerViewModel>(key = "player-$bucketId-$mediaId") { parametersOf(bucketId, mediaId) }
+fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
+    val vm = koinViewModel<GalleryPlayerViewModel>(key = "player-$mediaId") { parametersOf(mediaId) }
     val controller = vm.controller
     val ui by vm.ui.collectAsStateWithLifecycle()
     val state by controller.state.collectAsStateWithLifecycle()
@@ -118,21 +134,40 @@ fun GalleryPlayerScreen(mediaId: Long, bucketId: Long, onBack: () -> Unit) {
     val current = ui.queue.getOrNull(state.index)
 
     var controls by remember { mutableStateOf(true) }
-    var touched by remember { mutableLongStateOf(0L) }
+    // Last touch time and whether a finger is down. Plain fields, not state: they change on every pointer event, and
+    // recomposing the screen for each one would rebuild the controls mid-tap and swallow the press.
+    val touch = remember { TouchClock() }
     var locked by remember { mutableStateOf(false) }
     var lockFlash by remember { mutableLongStateOf(0L) }
-    var sheet by remember { mutableStateOf<Sheet?>(null) }
-    var info by remember { mutableStateOf(false) }
+    // Open sheets, parent first: a sheet opened from another (⋮ › Equalizer) goes back to it instead of closing.
+    var sheets by remember { mutableStateOf(emptyList<Sheet>()) }
+    val sheet = sheets.lastOrNull()
+    fun openSheet(s: Sheet) { sheets = listOf(s) }
+    fun pushSheet(s: Sheet) { sheets = sheets + s }
+    fun popSheet() { sheets = sheets.dropLast(1) }
+    fun closeSheets() { sheets = emptyList() }
+    val sheetBack: (() -> Unit)? = if (sheets.size > 1) ::popSheet else null
     var customTimer by remember { mutableStateOf(false) }
     var toast by remember { mutableStateOf<String?>(null) }
     var toastAt by remember { mutableLongStateOf(0L) }
     val zoom = remember { VideoZoom() }
     val feedback = remember { GestureFeedback() }
-    fun touch() { touched = System.nanoTime() }
+    fun touch() = touch.mark()
     fun say(text: String) { toast = text; toastAt = System.nanoTime() }
 
-    // Controls fade out 3.5s after the last touch (paused or not), like the system player.
-    LaunchedEffect(controls, touched, sheet) { if (controls && sheet == null) { delay(3500); controls = false } }
+    // Controls fade out 3.5s after the last touch anywhere on screen (scrolling the strip, dragging the seek bar, taps
+    // on buttons all count), never while a finger is down, and never while a sheet is open — like the system player.
+    LaunchedEffect(controls, sheet) {
+        if (!controls || sheet != null) return@LaunchedEffect
+        touch.mark()
+        // Re-checks until 3.5s pass with no finger down and no new touch.
+        while (true) {
+            val wait = HIDE_AFTER_MS - (System.currentTimeMillis() - touch.at)
+            if (!touch.down && wait <= 0) break
+            delay(if (touch.down) 250 else wait.coerceAtLeast(50))
+        }
+        controls = false
+    }
     LaunchedEffect(toastAt) { if (toast != null) { delay(1500); toast = null } }
     LaunchedEffect(lockFlash) { if (lockFlash != 0L) { delay(3000); lockFlash = 0L } }
     LaunchedEffect(current?.id) { zoom.reset(); vm.refreshFavorite() }
@@ -142,23 +177,13 @@ fun GalleryPlayerScreen(mediaId: Long, bucketId: Long, onBack: () -> Unit) {
 
     val window = activity?.window
     val audio = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
-    val leaveState by rememberUpdatedState(state.audioOnly)
-    DisposableEffect(Unit) {
-        onDispose {
-            // Leaving the player stops the video; audio-only mode keeps playing in the background.
-            if (!leaveState) controller.stop()
-            window?.attributes = window?.attributes?.apply { screenBrightness = WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE }
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
-        }
-    }
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { if (!state.audioOnly) controller.pause() }
     // The decoder's size has the recording's rotation applied; MediaStore's often doesn't (portrait phone videos).
     val ratio = if (state.videoWidth > 0 && state.videoHeight > 0) state.videoWidth.toFloat() / state.videoHeight
     else current?.let { if (it.width > 0 && it.height > 0) it.width.toFloat() / it.height else 0f } ?: 0f
     PipActions(activity, controller, state.isPlaying, inPip, ratio)
     BackHandler {
         when {
-            sheet != null -> sheet = null
+            sheet != null -> popSheet()
             locked -> lockFlash = System.nanoTime()
             else -> onBack()
         }
@@ -188,15 +213,15 @@ fun GalleryPlayerScreen(mediaId: Long, bucketId: Long, onBack: () -> Unit) {
         toggleMute = { vm.toggleMute(); touch() },
         pip = { if (activity != null) enterPip(activity, ratio, state.isPlaying) },
         aspect = { say(vm.cycleAspect()); touch() },
-        speed = { sheet = Sheet.SPEED },
+        speed = { openSheet(Sheet.SPEED) },
         audioOnly = { controller.setAudioOnly(true) },
         rotate = {
             activity?.requestedOrientation =
                 if (landscape) ActivityInfo.SCREEN_ORIENTATION_PORTRAIT else ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
             touch()
         },
-        subtitles = { sheet = Sheet.SUBTITLE },
-        more = { sheet = Sheet.MORE },
+        subtitles = { openSheet(Sheet.SUBTITLE) },
+        more = { openSheet(Sheet.MORE) },
         back = onBack,
         togglePlay = { controller.togglePlay(); touch() },
     )
@@ -205,15 +230,28 @@ fun GalleryPlayerScreen(mediaId: Long, bucketId: Long, onBack: () -> Unit) {
         AudioModeScreen(
             media = current, state = state, ui = ui, controller = controller,
             onBackToVideo = { controller.setAudioOnly(false) },
+            onClose = onBack,
             onToMp3 = {
                 say("Saving audio…")
                 scope.launch { val n = vm.extractAudio(current); say(if (n != null) "Saved to Music/QuickTube" else "Couldn't extract audio") }
             },
             onFavorite = { vm.favoriteRequest()?.let { favorite.launch(IntentSenderRequest.Builder(it).build()) } },
             onMode = { say(vm.nextMode().toast) },
-            onMore = { sheet = Sheet.AUDIO_MORE },
+            onMore = { openSheet(Sheet.AUDIO_MORE) },
         )
-    } else Box(Modifier.fillMaxSize().background(Color.Black)) {
+    } else Box(
+        Modifier.fillMaxSize().background(Color.Black)
+            // Watches every touch before the controls or gestures handle it, without taking it from them.
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val e = awaitPointerEvent(PointerEventPass.Initial)
+                        touch.down = e.changes.any { it.pressed }
+                        touch.mark()
+                    }
+                }
+            },
+    ) {
         val fitArea = !landscape && ui.aspect == AspectMode.FIT
         val status = WindowInsets.statusBarsIgnoringVisibility.asPaddingValues().calculateTopPadding()
         val nav = WindowInsets.navigationBarsIgnoringVisibility.asPaddingValues().calculateBottomPadding()
@@ -234,6 +272,8 @@ fun GalleryPlayerScreen(mediaId: Long, bucketId: Long, onBack: () -> Unit) {
         Box(Modifier.fillMaxSize().playerGestures(gestures))
 
         AnimatedVisibility(controls && !locked, enter = fadeIn(tween(220)), exit = fadeOut(tween(260))) {
+            // The system player dims the picture while its controls are up, so the white icons read on any video.
+            Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.22f)))
             val position = rememberLivePosition(controller, controls)
             if (landscape) LandscapeControls(ui, state.isPlaying, current, position, state.durationMs, state.index, controller, actions)
             else PortraitControls(ui, fitArea, state.isPlaying, current, position, state.durationMs, state.index, controller, actions)
@@ -245,56 +285,79 @@ fun GalleryPlayerScreen(mediaId: Long, bucketId: Long, onBack: () -> Unit) {
                     Modifier.align(if (landscape) Alignment.BottomStart else Alignment.BottomStart)
                         .windowInsetsPadding(WindowInsets.navigationBarsIgnoringVisibility)
                         .padding(start = if (landscape) 52.dp else 25.dp, bottom = if (landscape) 30.dp else 143.dp),
-                ) { ControlCircle(PlayerIcons.Lock, "Unlock", actions.toggleLock, plain = true) }
+                ) { ControlCircle(QtIcons.PLock, "Unlock", actions.toggleLock, plain = true) }
             }
         }
         GestureOverlays(feedback, state.durationMs, landscape)
+        if ((state.error != null || state.videoUnsupported) && current != null) PlaybackErrorCard(
+            unsupported = state.unsupported || state.videoUnsupported,
+            soundOnly = state.error == null && state.videoUnsupported,
+            hasNext = ui.queue.size > 1,
+            onOpenWith = { GalleryActions.openWith(context, current) },
+            onNext = { controller.next() },
+            modifier = Modifier.align(Alignment.Center),
+        )
         toast?.let { MessagePill(Modifier.align(Alignment.TopCenter).padding(top = status + 91.dp)) { Text(it, color = Color.White, fontSize = 15.sp) } }
     }
 
     // Sheets and dialogs over either mode.
+    // Keeps showing the last sheet while the whole stack slides away.
+    val shown = remember { mutableStateOf<Sheet?>(null) }.apply { if (sheet != null) value = sheet }
     AnimatedVisibility(sheet != null, enter = slideInVertically { it } + fadeIn(), exit = slideOutVertically { it } + fadeOut()) {
-        when (sheet) {
-            Sheet.SPEED -> SpeedSheet(state.speed, { controller.setSpeed(it) }, { sheet = null })
+        AnimatedContent(
+            targetState = sheets.size to (sheet ?: shown.value),
+            transitionSpec = {
+                val forward = targetState.first > initialState.first
+                (if (forward) slideInHorizontally(tween(260)) { it } else slideInHorizontally(tween(260)) { -it / 3 }) + fadeIn(tween(200)) togetherWith
+                    (if (forward) slideOutHorizontally(tween(260)) { -it / 3 } else slideOutHorizontally(tween(260)) { it }) + fadeOut(tween(160))
+            },
+            contentKey = { it.second },
+            label = "sheet",
+        ) { (_, shownSheet) ->
+        when (shownSheet) {
+            Sheet.SPEED -> SpeedSheet(state.speed, { controller.setSpeed(it) }, ::closeSheets, sheetBack)
             Sheet.SUBTITLE -> SubtitleSheet(
-                onSelect = { sheet = null; subtitlePicker.launch(arrayOf("application/x-subrip", "text/vtt", "text/*", "application/octet-stream")) },
-                onDismiss = { sheet = null },
+                onSelect = { closeSheets(); subtitlePicker.launch(arrayOf("application/x-subrip", "text/vtt", "text/*", "application/octet-stream")) },
+                onDismiss = ::closeSheets,
             )
-            Sheet.AUDIO_TRACK -> AudioTrackSheet(controller) { sheet = null }
-            Sheet.EQUALIZER -> EqualizerSheet(vm.equalizer()) { sheet = null }
+            Sheet.AUDIO_TRACK -> AudioTrackSheet(controller, ::closeSheets, sheetBack)
+            Sheet.INFO -> if (current != null) InfoSheet(current, state.durationMs, ::closeSheets, sheetBack)
+            Sheet.EQUALIZER -> EqualizerSheet(vm.equalizer(), ::closeSheets, sheetBack)
             Sheet.AUDIO_MORE -> if (current != null) AudioMoreSheet(
                 media = current,
-                onEqualizer = { sheet = Sheet.EQUALIZER },
-                onTimer = { sheet = Sheet.MORE },
-                onSpeed = { sheet = Sheet.SPEED },
+                onEqualizer = { pushSheet(Sheet.EQUALIZER) },
+                onTimer = { pushSheet(Sheet.MORE) },
+                onSpeed = { pushSheet(Sheet.SPEED) },
                 onShare = { GalleryActions.share(context, listOf(current)) },
-                onInfo = { sheet = null; info = true },
-                onDelete = { sheet = null; delete(listOf(current)) },
-                onDismiss = { sheet = null },
+                onInfo = { pushSheet(Sheet.INFO) },
+                onDelete = { closeSheets(); delete(listOf(current)) },
+                onDismiss = ::closeSheets,
             )
-            else -> MoreSheet(
+            null -> {}
+            Sheet.MORE -> MoreSheet(
                 ui,
                 onTimer = { vm.setTimer(it); if (it > 0) say("Stops in $it min") },
                 onCustomTimer = { customTimer = true },
                 onMode = { vm.setMode(it); say(it.toast) },
                 actions = buildList {
-                    add(SheetAction(QtIcons.AudioTrack, "Audio Track") { sheet = Sheet.AUDIO_TRACK })
-                    add(SheetAction(QtIcons.Equalizer, "Equalizer") { sheet = Sheet.EQUALIZER })
+                    add(SheetAction(QtIcons.PAudioTrack, "Audio Track") { pushSheet(Sheet.AUDIO_TRACK) })
+                    add(SheetAction(QtIcons.PEqualizer, "Equalizer") { pushSheet(Sheet.EQUALIZER) })
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) add(
-                        SheetAction(if (ui.favorite) QtIcons.Favorite else QtIcons.FavoriteBorder, "Favorite") {
+                        SheetAction(if (ui.favorite) QtIcons.PFavorite else QtIcons.PFavoriteBorder, "Favorite") {
                             vm.favoriteRequest()?.let { favorite.launch(IntentSenderRequest.Builder(it).build()) }
                         },
                     )
-                    add(SheetAction(QtIcons.Share, "Share") { current?.let { GalleryActions.share(context, listOf(it)) } })
-                    add(SheetAction(QtIcons.Info, "Info") { sheet = null; info = true })
-                    add(SheetAction(QtIcons.TouchApp, "Gesture") { sheet = null; vm.showTutorial() })
-                    add(SheetAction(QtIcons.Delete, "Delete") { sheet = null; current?.let { delete(listOf(it)) } })
+                    add(SheetAction(QtIcons.PShare, "Share") { current?.let { GalleryActions.share(context, listOf(it)) } })
+                    add(SheetAction(QtIcons.PInfo, "Info") { pushSheet(Sheet.INFO) })
+                    add(SheetAction(QtIcons.PGesture, "Gesture") { closeSheets(); vm.showTutorial() })
+                    add(SheetAction(QtIcons.PDelete, "Delete") { closeSheets(); current?.let { delete(listOf(it)) } })
                 },
-                onDismiss = { sheet = null },
+                onDismiss = ::closeSheets,
+                onBack = sheetBack,
             )
         }
+        }
     }
-    if (info && current != null) InfoDialog(current, state.durationMs) { info = false }
     if (customTimer) CustomTimerDialog(ui.timerMinutes.takeIf { it > 0 } ?: 90, { vm.setTimer(it); say("Stops in $it min") }) { customTimer = false }
     if (ui.showTutorial && !state.audioOnly) GestureGuide(vm::tutorialSeen)
 }
@@ -315,21 +378,21 @@ private class PlayerActions(
 )
 
 private fun aspectIcon(a: AspectMode) = when (a) {
-    AspectMode.FIT -> PlayerIcons.AspectFit
-    AspectMode.STRETCH -> PlayerIcons.AspectStretch
-    AspectMode.CROP -> PlayerIcons.AspectCrop
+    AspectMode.FIT -> QtIcons.PFit
+    AspectMode.STRETCH -> QtIcons.PStretch
+    AspectMode.CROP -> QtIcons.PCrop
 }
 
 @Composable
 private fun ControlButtons(ui: GalleryPlayerUi, a: PlayerActions, plain: Boolean, spacing: androidx.compose.ui.unit.Dp) {
     Row(horizontalArrangement = Arrangement.spacedBy(spacing)) {
-        ControlCircle(PlayerIcons.LockOpen, "Lock", a.toggleLock, plain)
-        ControlCircle(if (ui.muted) PlayerIcons.Mute else PlayerIcons.Volume, "Mute", a.toggleMute, plain)
-        ControlCircle(PlayerIcons.Pip, "Picture in picture", a.pip, plain)
+        ControlCircle(QtIcons.PLockOpen, "Lock", a.toggleLock, plain)
+        ControlCircle(if (ui.muted) QtIcons.PMute else QtIcons.PVolume, "Mute", a.toggleMute, plain)
+        ControlCircle(QtIcons.PPip, "Picture in picture", a.pip, plain)
         ControlCircle(aspectIcon(ui.aspect), "Aspect ratio", a.aspect, plain)
-        ControlCircle(PlayerIcons.Speed, "Speed", a.speed, plain)
-        ControlCircle(PlayerIcons.Headphones, "Play as audio", a.audioOnly, plain)
-        ControlCircle(PlayerIcons.Rotate, "Rotate", a.rotate, plain)
+        ControlCircle(QtIcons.PSpeed, "Speed", a.speed, plain)
+        ControlCircle(QtIcons.PHeadphones, "Play as audio", a.audioOnly, plain)
+        ControlCircle(QtIcons.PRotate, "Rotate", a.rotate, plain)
     }
 }
 
@@ -353,10 +416,10 @@ private fun PortraitControls(
         Column(Modifier.fillMaxWidth().then(if (fitArea) Modifier.background(Color.Black) else Modifier)) {
             Spacer(Modifier.windowInsetsPadding(WindowInsets.statusBarsIgnoringVisibility))
             Row(Modifier.fillMaxWidth().height(TopBarHeight).padding(start = 8.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                ControlCircle(QtIcons.ExpandMore, "Back", a.back, plain = true, size = 48.dp, iconSize = 34.dp)
+                ControlCircle(QtIcons.PDown, "Back", a.back, plain = true, size = 48.dp, iconSize = 34.dp)
                 TitleText(current?.name?.substringBeforeLast('.').orEmpty(), Modifier.weight(1f).padding(start = 8.dp, end = 8.dp))
-                ControlCircle(QtIcons.ClosedCaption, "Subtitles", a.subtitles, plain = true, size = 40.dp)
-                ControlCircle(QtIcons.MoreVert, "More", a.more, plain = true, size = 40.dp)
+                ControlCircle(QtIcons.PCaption, "Subtitles", a.subtitles, plain = true, size = 40.dp)
+                ControlCircle(QtIcons.PMore, "More", a.more, plain = true, size = 40.dp)
             }
         }
         CenterPlayPause(playing, a.togglePlay, Modifier.align(Alignment.Center).offset(y = (-24).dp))
@@ -383,18 +446,18 @@ private fun LandscapeControls(
     val strip = rememberLazyListState()
     Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.navigationBarsIgnoringVisibility)) {
         Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 36.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            ControlCircle(QtIcons.ExpandMore, "Back", a.back, plain = true, size = 48.dp)
+            ControlCircle(QtIcons.PDown, "Back", a.back, plain = true, size = 48.dp)
             TitleText(current?.name?.substringBeforeLast('.').orEmpty(), Modifier.weight(1f).padding(start = 14.dp, end = 24.dp))
-            ControlCircle(QtIcons.ClosedCaption, "Subtitles", a.subtitles, plain = true, size = 40.dp)
+            ControlCircle(QtIcons.PCaption, "Subtitles", a.subtitles, plain = true, size = 40.dp)
             Spacer(Modifier.width(16.dp))
-            ControlCircle(QtIcons.MoreVert, "More", a.more, plain = true, size = 40.dp)
+            ControlCircle(QtIcons.PMore, "More", a.more, plain = true, size = 40.dp)
             Spacer(Modifier.width(16.dp))
             BatteryClock()
         }
         Row(Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(60.dp), verticalAlignment = Alignment.CenterVertically) {
-            ControlCircle(QtIcons.Replay10, "Back 10 seconds", { controller.seekBy(-10_000) }, plain = true, size = 56.dp, iconSize = 40.dp)
+            ControlCircle(QtIcons.PReplay10, "Back 10 seconds", { controller.seekBy(-10_000) }, plain = true, size = 56.dp, iconSize = 40.dp)
             CenterPlayPause(playing, a.togglePlay, size = 56.dp)
-            ControlCircle(QtIcons.Forward10, "Forward 10 seconds", { controller.seekBy(10_000) }, plain = true, size = 56.dp, iconSize = 40.dp)
+            ControlCircle(QtIcons.PForward10, "Forward 10 seconds", { controller.seekBy(10_000) }, plain = true, size = 56.dp, iconSize = 40.dp)
         }
         Column(Modifier.align(Alignment.BottomStart).fillMaxWidth()) {
             PillSeekBar(position, durationMs, controller::seekTo, Modifier.fillMaxWidth().padding(horizontal = 60.dp))
@@ -441,6 +504,10 @@ private class GestureFeedback {
     var level by mutableStateOf<Pair<Boolean, Float>?>(null) // (brightness?, 0..1)
     var seekPreview by mutableStateOf<Long?>(null)
     var holding by mutableStateOf(false)
+    /** Hold on the right third: the speed list is anchored at [pickerY] (px) with [HoldSpeeds]`[pickerIndex]` chosen. */
+    var picker by mutableStateOf(false)
+    var pickerY by mutableFloatStateOf(0f)
+    var pickerIndex by mutableIntStateOf(1)
     var doubleTap by mutableStateOf<TapZone?>(null)
     var doubleTapAt by mutableLongStateOf(0L)
 }
@@ -454,7 +521,7 @@ private fun GestureOverlays(f: GestureFeedback, durationMs: Long, landscape: Boo
         f.level?.let { (brightness, v) ->
             // Shown on the side away from the finger: brightness (left swipe) on the right, volume on the left.
             LevelPill(
-                v, if (brightness) QtIcons.LightMode else if (v <= 0f) QtIcons.VolumeOff else QtIcons.VolumeUp,
+                v, if (brightness) QtIcons.PBrightness else if (v <= 0f) QtIcons.PMute else QtIcons.PVolume,
                 Modifier.align(if (brightness) Alignment.CenterEnd else Alignment.CenterStart).padding(horizontal = 24.dp),
             )
         }
@@ -470,8 +537,9 @@ private fun GestureOverlays(f: GestureFeedback, durationMs: Long, landscape: Boo
                 Text(clock(durationMs), color = Color.White, fontSize = 12.sp)
             }
         }
-        if (f.holding) MessagePill(Modifier.align(Alignment.TopCenter).padding(top = status + 93.dp)) {
-            Icon(QtIcons.Play, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
+        if (f.holding && f.picker) HoldSpeedList(f.pickerY, f.pickerIndex)
+        else if (f.holding) MessagePill(Modifier.align(Alignment.TopCenter).padding(top = status + 93.dp)) {
+            Icon(QtIcons.PPlay, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
             Text("2.0X Speed", color = Color.White, fontSize = 15.sp)
         }
         f.doubleTap?.let { zone ->
@@ -479,9 +547,9 @@ private fun GestureOverlays(f: GestureFeedback, durationMs: Long, landscape: Boo
                 Modifier.align(if (zone == TapZone.RIGHT) Alignment.CenterEnd else Alignment.CenterStart)
                     .padding(horizontal = if (landscape) 160.dp else 60.dp),
             ) {
-                if (zone == TapZone.LEFT) Icon(QtIcons.FastRewind, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                if (zone == TapZone.LEFT) Icon(QtIcons.PFastRewind, null, tint = Color.White, modifier = Modifier.size(16.dp))
                 Text(if (zone == TapZone.RIGHT) "+10S" else "-10S", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                if (zone == TapZone.RIGHT) Icon(QtIcons.FastForward, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                if (zone == TapZone.RIGHT) Icon(QtIcons.PFastForward, null, tint = Color.White, modifier = Modifier.size(16.dp))
             }
         }
     }
@@ -520,15 +588,30 @@ private fun rememberGestureHandler(
                 f.doubleTap = zone
                 f.doubleTapAt = System.nanoTime()
             }
-            override fun onHoldStart() {
+            override val holding get() = f.holding
+            override fun onHoldStart(position: Offset, width: Int) {
                 holdPrevious = controller.state.value.speed
-                controller.setSpeed(2f)
+                // Right third: the system player's speed list, starting at 1.5X under the finger. Elsewhere: 2.0X.
+                f.picker = position.x > width * 2f / 3f
+                f.pickerY = position.y
+                f.pickerIndex = 1
+                controller.setSpeed(if (f.picker) HoldSpeeds[1] else 2f)
                 f.holding = true
+            }
+            override fun onHoldMove(y: Float) {
+                if (!f.picker) return
+                val step = HoldStepDp * context.resources.displayMetrics.density
+                val i = (1 + ((f.pickerY - y) / step).roundToInt()).coerceIn(0, HoldSpeeds.lastIndex)
+                if (i != f.pickerIndex) {
+                    f.pickerIndex = i
+                    controller.setSpeed(HoldSpeeds[i])
+                }
             }
             override fun onHoldEnd() {
                 if (!f.holding) return
                 controller.setSpeed(holdPrevious)
                 f.holding = false
+                f.picker = false
             }
             override fun onVerticalStart(left: Boolean) {
                 level = if (left) {
@@ -608,8 +691,9 @@ private fun pipParams(activity: Activity, ratio: Float, playing: Boolean): Pictu
 }
 
 private fun enterPip(activity: Activity, ratio: Float, playing: Boolean) {
-    runCatching { activity.enterPictureInPictureMode(pipParams(activity, ratio, playing)) }
-        .onFailure { Toast.makeText(activity, "Picture-in-picture isn't available", Toast.LENGTH_SHORT).show() }
+    val ok = runCatching { activity.enterPictureInPictureMode(pipParams(activity, ratio, playing)) }
+        .onFailure { android.util.Log.w("GalleryPlayer", "PiP failed", it) }.getOrDefault(false)
+    if (!ok) Toast.makeText(activity, "Picture-in-picture isn't available", Toast.LENGTH_SHORT).show()
 }
 
 /** Previous / play-pause / next buttons on the picture-in-picture window. */
@@ -630,7 +714,124 @@ private fun PipActions(activity: Activity?, controller: PlayerController, playin
         ContextCompat.registerReceiver(activity, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         onDispose { activity.unregisterReceiver(receiver) }
     }
-    LaunchedEffect(playing, inPip) {
-        if (inPip) runCatching { activity.setPictureInPictureParams(pipParams(activity, ratio, playing)) }
+    LaunchedEffect(playing, inPip, ratio) {
+        runCatching { activity.setPictureInPictureParams(pipParams(activity, ratio, playing)) }
+    }
+}
+
+/** Speeds offered by holding on the right of the video, slowest first. */
+private val HoldSpeeds = listOf(1.25f, 1.5f, 2f, 3f)
+/** How far the finger moves to step to the next speed. */
+private const val HoldStepDp = 44f
+private val HoldRow = 87.dp
+private val HoldBand = 56.dp
+
+/**
+ * The system player's hold-for-speed list: four full-width bands (3.0X at the top, 1.25X at the bottom) around the
+ * finger, each a soft left-to-right glow. The chosen speed reads larger with a ▶▶ mark ("1.5X Speed") and its band
+ * brightens; changes animate so sliding the finger feels continuous. The list stays on screen near the edges.
+ */
+@Composable
+private fun HoldSpeedList(anchorY: Float, selected: Int) {
+    val density = LocalDensity.current
+    val row = with(density) { HoldRow.toPx() }
+    val band = with(density) { HoldBand.toPx() }
+    val appear = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { appear.animateTo(1f, tween(180)) }
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer { alpha = appear.value }) {
+        val height = constraints.maxHeight.toFloat()
+        // Keep 3.0X (two rows above the finger) and 1.25X (one below) fully visible.
+        val anchor = anchorY.coerceIn(2 * row + band, (height - row - band).coerceAtLeast(2 * row + band))
+        HoldSpeeds.forEachIndexed { i, speed ->
+            val on = i == selected
+            val glow by animateFloatAsState(if (on) 1f else 0f, tween(160), label = "glow")
+            val centerY = anchor - (i - 1) * row
+            Box(
+                Modifier.fillMaxWidth().height(HoldBand)
+                    .offset { IntOffset(0, (centerY - band / 2).roundToInt()) }
+                    .drawBehind {
+                        drawRect(
+                            Brush.horizontalGradient(
+                                0f to Color.White.copy(alpha = 0.02f + 0.06f * glow),
+                                0.55f to Color.White.copy(alpha = 0.07f + 0.08f * glow),
+                                1f to Color.White.copy(alpha = 0.14f + 0.10f * glow),
+                            ),
+                        )
+                    },
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                Row(
+                    Modifier.padding(start = 96.dp).graphicsLayer {
+                        val scale = 1f + 0.22f * glow
+                        scaleX = scale; scaleY = scale
+                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
+                    },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (on) {
+                        Icon(QtIcons.PFastForward, null, tint = Color.White, modifier = Modifier.size(19.dp))
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    val label = (if (speed * 100 % 10 == 0f) "%.1fX" else "%.2fX").format(java.util.Locale.US, speed)
+                    Text(
+                        if (on) "$label Speed" else label,
+                        color = Color.White.copy(alpha = 0.7f + 0.3f * glow), fontSize = 15.sp,
+                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                        style = androidx.compose.ui.text.TextStyle(shadow = androidx.compose.ui.graphics.Shadow(Color.Black.copy(alpha = 0.5f), blurRadius = 6f)),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** The controls hide this long after the last touch. */
+private const val HIDE_AFTER_MS = 3_500L
+
+/** When the screen was last touched and whether a finger is on it now; plain fields so touches never recompose. */
+private class TouchClock {
+    @Volatile var at = System.currentTimeMillis()
+    @Volatile var down = false
+    fun mark() { at = System.currentTimeMillis() }
+}
+
+/** Shown when a file can't play: the phone can't decode its format (HEVC 10-bit, WMV…) or the file is broken. */
+@Composable
+private fun PlaybackErrorCard(unsupported: Boolean, soundOnly: Boolean, hasNext: Boolean, onOpenWith: () -> Unit, onNext: () -> Unit, modifier: Modifier) {
+    Column(
+        modifier.padding(horizontal = 36.dp).clip(RoundedCornerShape(24.dp)).background(SheetColor).padding(24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Icon(QtIcons.Error, null, tint = Color.White.copy(alpha = 0.85f), modifier = Modifier.size(36.dp))
+        Spacer(Modifier.height(14.dp))
+        Text(
+            when {
+                soundOnly -> "This phone can't show this video"
+                unsupported -> "This phone can't play this format"
+                else -> "Can't play this file"
+            },
+            color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.SemiBold, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+        Spacer(Modifier.height(6.dp))
+        Text(
+            when {
+                soundOnly -> "Its video uses a codec this phone has no decoder for, so only the sound plays. Another player app may still show it."
+                unsupported -> "Its video or audio uses a codec this phone has no decoder for. Another player app may still open it."
+                else -> "The file may be damaged or still being written."
+            },
+            color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+        )
+        Spacer(Modifier.height(18.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (hasNext) Box(
+                Modifier.height(42.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.12f)).pressable(onClick = onNext).padding(horizontal = 18.dp),
+                contentAlignment = Alignment.Center,
+            ) { Text("Next video", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
+            Box(
+                Modifier.height(42.dp).clip(CircleShape).background(com.edureminder.quicktube.core.designsystem.LocalQtExtras.current.brand)
+                    .pressable(onClick = onOpenWith).padding(horizontal = 18.dp),
+                contentAlignment = Alignment.Center,
+            ) { Text("Open with…", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
+        }
     }
 }

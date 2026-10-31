@@ -54,7 +54,7 @@ import com.edureminder.quicktube.feature.home.HomeActions
 import com.edureminder.quicktube.feature.gallery.AlbumScreen
 import com.edureminder.quicktube.feature.gallery.GalleryScreen
 import com.edureminder.quicktube.feature.gallery.ViewerScreen
-import com.edureminder.quicktube.feature.gallery.player.GalleryPlayerScreen
+import com.edureminder.quicktube.player.GalleryPlayerActivity
 import com.edureminder.quicktube.core.designsystem.LocalBottomBarHidden
 import com.edureminder.quicktube.core.designsystem.QtEasing
 import androidx.compose.animation.core.tween
@@ -97,11 +97,16 @@ private val tabs = listOf(
 @Composable
 fun AppNavHost(nav: NavHostController) {
     val router = koinInject<UrlRouter>()
+    val context = androidx.compose.ui.platform.LocalContext.current
     val library = koinInject<LibraryRepository>()
     val backStack by nav.currentBackStackEntryAsState()
     val dest = backStack?.destination
     val onTab = tabs.any { t -> dest?.hierarchy?.any { it.hasRoute(t.route::class) } == true }
-    val showMini = dest?.let { d -> !d.hasRoute(PlayerRoute::class) && !d.hasRoute(VideoRoute::class) && !d.hasRoute(GalleryViewerRoute::class) && !d.hasRoute(GalleryPlayerRoute::class) } ?: false
+    // A gallery video is already on screen (its own player or picture-in-picture); gallery audio reopens that player.
+    val playing by koinInject<com.edureminder.quicktube.core.media.PlayerController>().state.collectAsStateWithLifecycle()
+    val galleryId = playing.current?.id?.takeIf { it.startsWith("gallery:") }?.removePrefix("gallery:")?.toLongOrNull()
+    val galleryVideo = galleryId != null && !playing.audioOnly
+    val showMini = !galleryVideo && dest?.let { d -> !d.hasRoute(PlayerRoute::class) && !d.hasRoute(VideoRoute::class) && !d.hasRoute(GalleryViewerRoute::class) } ?: false
     // A tab screen can swap the floating bar for its own (the gallery's selection actions).
     val barHidden = remember { mutableStateOf(false) }
     val activeCount by library.downloads.map { l -> l.count { it.status != DownloadStatus.COMPLETED && it.deletedAt == 0L } }
@@ -179,7 +184,7 @@ fun AppNavHost(nav: NavHostController) {
                 GalleryScreen(
                     onOpenAlbum = { nav.navigate(GalleryAlbumRoute(it.bucketId, it.name)) },
                     onOpenViewer = { nav.navigate(GalleryViewerRoute(it.id)) },
-                    onOpenVideo = { nav.navigate(GalleryPlayerRoute(it.id)) },
+                    onOpenVideo = { GalleryPlayerActivity.start(context, it.id) },
                 )
             }
             composable<GalleryAlbumRoute> { e ->
@@ -187,7 +192,7 @@ fun AppNavHost(nav: NavHostController) {
                 AlbumScreen(
                     r.bucketId, r.name, onBack = nav::popBackStack,
                     onOpenViewer = { nav.navigate(GalleryViewerRoute(it.id, r.bucketId)) },
-                    onOpenVideo = { nav.navigate(GalleryPlayerRoute(it.id, r.bucketId)) },
+                    onOpenVideo = { GalleryPlayerActivity.start(context, it.id) },
                 )
             }
             composable<GalleryViewerRoute>(
@@ -197,16 +202,7 @@ fun AppNavHost(nav: NavHostController) {
                 popExitTransition = { fadeOut(tween(200)) + scaleOut(tween(220), targetScale = 0.94f) },
             ) { e ->
                 val r = e.toRoute<GalleryViewerRoute>()
-                ViewerScreen(r.mediaId, r.bucketId, onBack = nav::popBackStack, onOpenVideo = { nav.navigate(GalleryPlayerRoute(it.id, r.bucketId)) })
-            }
-            composable<GalleryPlayerRoute>(
-                enterTransition = { fadeIn(tween(200)) },
-                exitTransition = { fadeOut(tween(150)) },
-                popEnterTransition = { fadeIn(tween(150)) },
-                popExitTransition = { fadeOut(tween(200)) },
-            ) { e ->
-                val r = e.toRoute<GalleryPlayerRoute>()
-                GalleryPlayerScreen(r.mediaId, r.bucketId, onBack = nav::popBackStack)
+                ViewerScreen(r.mediaId, r.bucketId, onBack = nav::popBackStack, onOpenVideo = { GalleryPlayerActivity.start(context, it.id) })
             }
             composable<SettingsRoute>(
                 enterTransition = QtTransitions.tabEnter, exitTransition = QtTransitions.tabExit,
@@ -291,7 +287,9 @@ fun AppNavHost(nav: NavHostController) {
             Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .onSizeChanged { overlayHeight = with(density) { it.height.toDp() } },
         ) {
-            if (showMini && !barHidden.value) MiniPlayer(onExpand = { nav.navigate(PlayerRoute) { launchSingleTop = true } })
+            if (showMini && !barHidden.value) MiniPlayer(onExpand = {
+                if (galleryId != null) GalleryPlayerActivity.start(context, galleryId) else nav.navigate(PlayerRoute) { launchSingleTop = true }
+            })
             if (onTab && !barHidden.value) {
                 val selected = tabs.indexOfFirst { t -> dest?.hierarchy?.any { it.hasRoute(t.route::class) } == true }
                 FloatingNavBar(

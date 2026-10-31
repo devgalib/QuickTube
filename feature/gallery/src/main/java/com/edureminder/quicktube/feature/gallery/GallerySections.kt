@@ -2,6 +2,10 @@ package com.edureminder.quicktube.feature.gallery
 
 import com.edureminder.quicktube.core.model.GalleryAlbum
 import com.edureminder.quicktube.core.model.GalleryMedia
+import com.edureminder.quicktube.core.navigation.GALLERY_ALL
+import com.edureminder.quicktube.core.navigation.GALLERY_AUDIOS
+import com.edureminder.quicktube.core.navigation.GALLERY_PHOTOS
+import com.edureminder.quicktube.core.navigation.GALLERY_VIDEOS
 import java.time.Instant
 import java.time.YearMonth
 import java.time.ZoneId
@@ -61,11 +65,47 @@ object GallerySections {
         return out
     }
 
-    /** Folders with their newest item as cover, most recently updated first. */
+    /**
+     * What one gallery screen shows: [GALLERY_ALL] is every photo and video (the Photos tab), the virtual albums one
+     * kind from every folder, and a real folder its photos and videos. Audio lives only in the Audios album.
+     */
+    fun filter(items: List<GalleryMedia>, bucketId: Long): List<GalleryMedia> = when (bucketId) {
+        GALLERY_ALL -> items.filter { !it.isAudio }
+        GALLERY_PHOTOS -> items.filter { it.isPhoto }
+        GALLERY_VIDEOS -> items.filter { it.isVideo }
+        GALLERY_AUDIOS -> items.filter { it.isAudio }
+        else -> items.filter { it.bucketId == bucketId && !it.isAudio }
+    }
+
+    /** The three albums that exist only in the gallery: all photos, all videos and all audio, newest item as cover. */
+    fun virtualAlbums(items: List<GalleryMedia>): List<GalleryAlbum> {
+        var photos = 0; var videos = 0; var audios = 0
+        var photo: GalleryMedia? = null; var video: GalleryMedia? = null; var audio: GalleryMedia? = null
+        for (m in items) when {
+            m.isAudio -> { audios++; if (audio == null) audio = m }
+            m.isVideo -> { videos++; if (video == null) video = m }
+            else -> { photos++; if (photo == null) photo = m }
+        }
+        return listOf(
+            GalleryAlbum(GALLERY_PHOTOS, "Photos", photos, photo, virtual = true),
+            GalleryAlbum(GALLERY_VIDEOS, "Videos", videos, video, virtual = true),
+            GalleryAlbum(GALLERY_AUDIOS, "Audios", audios, audio, virtual = true),
+        )
+    }
+
+    /**
+     * The player's queue for [media]: the other files of the same kind (video or audio) in the same folder, so opening a
+     * video from the Videos album or the Photos tab still only lists that folder's videos.
+     */
+    fun folderQueue(items: List<GalleryMedia>, media: GalleryMedia): List<GalleryMedia> =
+        items.filter { it.bucketId == media.bucketId && it.isAudio == media.isAudio && it.isVideo == media.isVideo }
+
+    /** Folders of photos and videos with their newest item as cover, most recently updated first. */
     fun albums(items: List<GalleryMedia>): List<GalleryAlbum> {
         val counts = LinkedHashMap<Long, Int>()
         val covers = HashMap<Long, GalleryMedia>()
         for (m in items) {
+            if (m.isAudio) continue
             counts[m.bucketId] = (counts[m.bucketId] ?: 0) + 1
             covers.getOrPut(m.bucketId) { m }
         }

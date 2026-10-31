@@ -24,8 +24,12 @@ interface PlayerGestureHandler {
     val zoomed: Boolean
     fun onTap()
     fun onDoubleTap(zone: TapZone)
-    fun onHoldStart()
+    /** A finger held still: [position] decides 2X (left/centre) or the speed list (right third). */
+    fun onHoldStart(position: Offset, width: Int)
+    /** The held finger moved; [y] is its position, for picking a speed from the list. */
+    fun onHoldMove(y: Float)
     fun onHoldEnd()
+    val holding: Boolean
     /** Vertical swipe on the [left] half (brightness) or right half (volume); [delta] is a fraction of the height, up = +. */
     fun onVerticalStart(left: Boolean)
     fun onVertical(left: Boolean, delta: Float)
@@ -54,7 +58,7 @@ fun Modifier.playerGestures(handler: PlayerGestureHandler): Modifier {
                     val third = size.width / 3f
                     h.onDoubleTap(if (pos.x < third) TapZone.LEFT else if (pos.x > 2 * third) TapZone.RIGHT else TapZone.CENTER)
                 },
-                onLongPress = { if (h.enabled && !h.zoomed) h.onHoldStart() },
+                onLongPress = { pos -> if (h.enabled && !h.zoomed) h.onHoldStart(pos, size.width) },
                 onPress = {
                     tryAwaitRelease()
                     h.onHoldEnd()
@@ -73,6 +77,11 @@ fun Modifier.playerGestures(handler: PlayerGestureHandler): Modifier {
                     if (!h.enabled) break
                     val fingers = event.changes.count { it.pressed }
                     if (fingers >= 2 && mode != Drag.SEEK && mode != Drag.VERTICAL) mode = Drag.TRANSFORM
+                    // While holding for speed, moves only pick from the list (and aren't consumed, so the hold lasts).
+                    if (h.holding && mode == Drag.NONE) {
+                        event.changes.firstOrNull { it.id == down.id }?.let { h.onHoldMove(it.position.y) }
+                        continue
+                    }
                     when (mode) {
                         Drag.NONE -> {
                             val change = event.changes.firstOrNull { it.id == down.id } ?: break

@@ -15,7 +15,7 @@ import com.edureminder.quicktube.core.download.MediaMerger
 import com.edureminder.quicktube.core.media.PlayItem
 import com.edureminder.quicktube.core.media.PlayerController
 import com.edureminder.quicktube.core.model.GalleryMedia
-import com.edureminder.quicktube.core.navigation.GALLERY_ALL
+import com.edureminder.quicktube.feature.gallery.GallerySections
 import com.edureminder.quicktube.feature.gallery.uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -59,7 +59,6 @@ data class GalleryPlayerUi(
  */
 class GalleryPlayerViewModel(
     app: Application,
-    private val bucketId: Long,
     private val mediaId: Long,
     private val repo: GalleryRepository,
     val controller: PlayerController,
@@ -80,14 +79,16 @@ class GalleryPlayerViewModel(
         repo.load()
         viewModelScope.launch {
             val all = repo.library.filterNotNull().first { it.complete }.items
-            val videos = all.filter { it.isVideo && (bucketId == GALLERY_ALL || it.bucketId == bucketId) }
+            // Always the opened file's own folder (and kind), whichever album or tab it was opened from.
+            val media = all.firstOrNull { it.id == mediaId } ?: return@launch
+            val videos = GallerySections.folderQueue(all, media)
             val at = videos.indexOfFirst { it.id == mediaId }.coerceAtLeast(0)
             // A window around the tapped video keeps the queue (and the session's binder traffic) small.
             val from = (at - QUEUE / 2).coerceAtLeast(0)
             val queue = videos.subList(from, minOf(videos.size, from + QUEUE)).toList()
             _ui.update { it.copy(queue = queue) }
             if (queue.isEmpty()) return@launch
-            controller.play(queue.map { it.toPlayItem() }, at - from)
+            controller.play(queue.map { it.toPlayItem() }, at - from, audioOnly = media.isAudio)
             controller.setVolume(1f)
             applyMode(_ui.value.mode)
             refreshFavorite()
@@ -212,7 +213,9 @@ class GalleryPlayerViewModel(
         timerJob?.cancel()
     }
 
-    private fun GalleryMedia.toPlayItem() = PlayItem(id = "gallery:$id", uri = uri.toString(), title = name.substringBeforeLast('.'))
+    private fun GalleryMedia.toPlayItem() = PlayItem(
+        id = "gallery:$id", uri = uri.toString(), title = name.substringBeforeLast('.'), artist = artist, isVideo = !isAudio,
+    )
 
     private companion object {
         const val QUEUE = 100

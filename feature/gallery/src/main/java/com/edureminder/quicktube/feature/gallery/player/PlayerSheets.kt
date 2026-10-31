@@ -77,8 +77,8 @@ private val Dim = Color.White.copy(alpha = 0.6f)
 fun PlayerSheet(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
     Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { onDismiss() } }, contentAlignment = Alignment.BottomCenter) {
         Column(
-            // Every sheet in the system player shares one height: its top edge sits at ~38% of the screen.
-            Modifier.fillMaxWidth().fillMaxHeight(0.62f).clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)).background(SheetColor)
+            // Each sheet is only as tall as its content, so nothing sits in a big empty gap.
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)).background(SheetColor)
                 // Swallow taps inside the sheet.
                 .clickable(remember { MutableInteractionSource() }, indication = null) {}
                 .navigationBarsPadding(),
@@ -87,15 +87,37 @@ fun PlayerSheet(onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Un
     }
 }
 
+/**
+ * Grab handle plus title row. Sheets opened from another sheet get a back arrow that returns to it.
+ */
+@Composable
+fun SheetHeader(title: String, onBack: (() -> Unit)?, trailing: @Composable () -> Unit = {}) {
+    SheetHandle()
+    Row(
+        Modifier.fillMaxWidth().height(56.dp).padding(start = if (onBack != null) 8.dp else 24.dp, end = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (onBack != null) {
+            Box(Modifier.size(44.dp).clip(CircleShape).pressable(scaleDown = 0.88f, onClick = onBack), contentAlignment = Alignment.Center) {
+                Icon(QtIcons.PBack, "Back", tint = Color.White, modifier = Modifier.size(24.dp))
+            }
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(title, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        trailing()
+    }
+}
+
 private val SpeedPresets = listOf(0.5f, 1f, 1.25f, 2f)
 private fun speedLabel(s: Float) = (if (s * 100 % 10 == 0f) "%.1fX" else "%.2fX").format(Locale.US, s)
 
 /** Preset chips plus a ruler from 0.25X to 4.0X in 0.25 steps, as in the system player. */
 @Composable
-fun SpeedSheet(speed: Float, onSpeed: (Float) -> Unit, onDismiss: () -> Unit) {
+fun SpeedSheet(speed: Float, onSpeed: (Float) -> Unit, onDismiss: () -> Unit, onBack: (() -> Unit)? = null) {
     val accent = LocalQtExtras.current.brand
     PlayerSheet(onDismiss) {
-        Spacer(Modifier.height(160.dp))
+        SheetHeader("Playback speed", onBack)
+        Spacer(Modifier.height(6.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterHorizontally)) {
             SpeedPresets.forEach { s ->
                 val on = s == speed
@@ -107,9 +129,9 @@ fun SpeedSheet(speed: Float, onSpeed: (Float) -> Unit, onDismiss: () -> Unit) {
                 ) { Text(speedLabel(s), color = if (on) Color.White else Dim, fontSize = 14.sp) }
             }
         }
-        Spacer(Modifier.height(70.dp))
+        Spacer(Modifier.height(20.dp))
         SpeedRuler(speed, onSpeed, Modifier.padding(horizontal = 16.dp))
-        Spacer(Modifier.height(72.dp))
+        Spacer(Modifier.height(20.dp))
     }
 }
 
@@ -169,10 +191,12 @@ fun MoreSheet(
     onMode: (PlayMode) -> Unit,
     actions: List<SheetAction>,
     onDismiss: () -> Unit,
+    onBack: (() -> Unit)? = null,
 ) {
     PlayerSheet(onDismiss) {
+        if (onBack != null) SheetHeader("Timer & playback", onBack)
         Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)) {
-            Spacer(Modifier.height(30.dp))
+            Spacer(Modifier.height(if (onBack != null) 4.dp else 30.dp))
             Text("Timer", color = Dim, fontSize = 15.sp)
             Spacer(Modifier.height(14.dp))
             val presets = listOf(0, 15, 30, 45, 60)
@@ -214,10 +238,10 @@ fun MoreSheet(
 data class SheetAction(val icon: ImageVector, val label: String, val onClick: () -> Unit)
 
 fun modeIcon(mode: PlayMode) = when (mode) {
-    PlayMode.REPEAT_ALL -> QtIcons.Repeat
-    PlayMode.AUTOPLAY_OFF -> QtIcons.Play
-    PlayMode.REPEAT_ONE -> QtIcons.RepeatOne
-    PlayMode.SHUFFLE -> QtIcons.Shuffle
+    PlayMode.REPEAT_ALL -> QtIcons.PRepeat
+    PlayMode.AUTOPLAY_OFF -> QtIcons.PPlay
+    PlayMode.REPEAT_ONE -> QtIcons.PRepeatOne
+    PlayMode.SHUFFLE -> QtIcons.PShuffle
 }
 
 /** Rounded track with a white pill on the selected segment. */
@@ -226,8 +250,9 @@ private fun Segmented(count: Int, selected: Int, onSelect: (Int) -> Unit, conten
     Row(Modifier.fillMaxWidth().height(42.dp).clip(RoundedCornerShape(14.dp)).background(Faint).padding(3.dp)) {
         repeat(count) { i ->
             val on = i == selected
+            // The last timer segment reads "Custom", so it gets more room than the numbers.
             Box(
-                Modifier.weight(1f).fillMaxSize().clip(RoundedCornerShape(11.dp))
+                Modifier.weight(if (count == 6 && i == 5) 1.6f else 1f).fillMaxSize().clip(RoundedCornerShape(11.dp))
                     .then(if (on) Modifier.background(Color.White) else Modifier)
                     .clickable { onSelect(i) },
                 contentAlignment = Alignment.Center,
@@ -239,56 +264,65 @@ private fun Segmented(count: Int, selected: Int, onSelect: (Int) -> Unit, conten
 @Composable
 fun SubtitleSheet(onSelect: () -> Unit, onDismiss: () -> Unit) {
     PlayerSheet(onDismiss) {
-        Text("Subtitle", color = Color.White, fontSize = 18.sp, modifier = Modifier.padding(start = 24.dp, top = 34.dp, bottom = 18.dp))
+        SheetHeader("Subtitle", null)
         Row(
             Modifier.fillMaxWidth().clickable(onClick = onSelect).padding(horizontal = 24.dp, vertical = 22.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Select Subtitle", color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
-            Icon(QtIcons.ChevronRight, null, tint = Dim, modifier = Modifier.size(20.dp))
+            Icon(QtIcons.PChevronRight, null, tint = Dim, modifier = Modifier.size(20.dp))
         }
         HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = Color.White.copy(alpha = 0.12f))
-        Spacer(Modifier.height(120.dp))
+        Spacer(Modifier.height(24.dp))
     }
 }
 
-/** Centred card with label / value rows and a full-width accent OK, as the system player's Info. */
+/** File details as a bottom sheet (within thumb reach on big phones), with a full-width accent OK. */
 @Composable
-fun InfoDialog(media: GalleryMedia, durationMs: Long, onDismiss: () -> Unit) {
+fun InfoSheet(media: GalleryMedia, durationMs: Long, onDismiss: () -> Unit, onBack: (() -> Unit)? = null) {
     val rows = remember(media, durationMs) {
-        listOf(
+        listOfNotNull(
             "Name" to media.name,
             "Type" to media.mimeType,
             "Duration" to clock(if (durationMs > 0) durationMs else media.durationMs),
             "Size" to Format.bytes(media.sizeBytes),
+            if (media.width > 0 && !media.isAudio) "Resolution" to "${media.width} × ${media.height}" else null,
             "Date" to SimpleDateFormat("MMM dd, yyyy", Locale.getDefault()).format(Date(media.dateMs)),
             "Path" to media.path.substringBeforeLast('/'),
         )
     }
-    Dialog(onDismissRequest = onDismiss) {
-        Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(28.dp)).background(Color(0xFF232427)).padding(horizontal = 24.dp, vertical = 22.dp)) {
-            Text("Info", color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
-            Spacer(Modifier.height(10.dp))
+    PlayerSheet(onDismiss) {
+        SheetHeader("Info", onBack)
+        Column(Modifier.padding(horizontal = 24.dp)) {
             rows.forEach { (k, v) ->
-                Row(Modifier.padding(vertical = 9.dp), verticalAlignment = Alignment.Top) {
-                    Text("$k : ", color = Dim, fontSize = 12.sp, modifier = Modifier.padding(top = 2.dp))
+                Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.Top) {
+                    Text("$k", color = Dim, fontSize = 13.sp, modifier = Modifier.width(84.dp).padding(top = 1.dp))
                     Text(v, color = Color.White, fontSize = 15.sp)
                 }
             }
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(16.dp))
             Box(
-                Modifier.fillMaxWidth().height(44.dp).clip(CircleShape).background(LocalQtExtras.current.brand).pressable(onClick = onDismiss),
+                Modifier.fillMaxWidth().height(46.dp).clip(CircleShape).background(LocalQtExtras.current.brand).pressable(onClick = onDismiss),
                 contentAlignment = Alignment.Center,
             ) { Text("OK", color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+            Spacer(Modifier.height(20.dp))
         }
     }
 }
 
+/** Small grab handle at the top of a sheet. */
 @Composable
-fun AudioTrackSheet(controller: PlayerController, onDismiss: () -> Unit) {
+fun SheetHandle() {
+    Box(Modifier.fillMaxWidth().padding(top = 10.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.width(36.dp).height(4.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.3f)))
+    }
+}
+
+@Composable
+fun AudioTrackSheet(controller: PlayerController, onDismiss: () -> Unit, onBack: (() -> Unit)? = null) {
     val tracks = remember { controller.audioTracks() }
     PlayerSheet(onDismiss) {
-        Text("Audio Track", color = Color.White, fontSize = 18.sp, modifier = Modifier.padding(start = 24.dp, top = 30.dp, bottom = 12.dp))
+        SheetHeader("Audio Track", onBack)
         if (tracks.isEmpty()) Text("No audio track", color = Dim, modifier = Modifier.padding(24.dp))
         tracks.forEach { t ->
             Row(
@@ -305,9 +339,10 @@ fun AudioTrackSheet(controller: PlayerController, onDismiss: () -> Unit) {
 
 /** Android's built-in equalizer on the player's audio session: on/off, presets and per-band levels. */
 @Composable
-fun EqualizerSheet(eq: Equalizer?, onDismiss: () -> Unit) {
+fun EqualizerSheet(eq: Equalizer?, onDismiss: () -> Unit, onBack: (() -> Unit)? = null) {
     PlayerSheet(onDismiss) {
         if (eq == null) {
+            SheetHeader("Equalizer", onBack)
             Text("Equalizer isn't available right now", color = Dim, modifier = Modifier.padding(24.dp))
             Spacer(Modifier.height(40.dp))
             return@PlayerSheet
@@ -316,10 +351,7 @@ fun EqualizerSheet(eq: Equalizer?, onDismiss: () -> Unit) {
         var preset by remember { mutableIntStateOf(runCatching { eq.currentPreset.toInt() }.getOrDefault(-1)) }
         val range = eq.bandLevelRange
         val levels = remember { (0 until eq.numberOfBands).map { b -> mutableFloatStateOf(eq.getBandLevel(b.toShort()).toFloat()) } }
-        Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 16.dp, top = 24.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Equalizer", color = Color.White, fontSize = 18.sp, modifier = Modifier.weight(1f))
-            Switch(enabled, { enabled = it; eq.enabled = it })
-        }
+        SheetHeader("Equalizer", onBack) { Switch(enabled, { enabled = it; eq.enabled = it }) }
         LazyRow(contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 24.dp, vertical = 14.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             items((0 until eq.numberOfPresets).toList()) { p ->
                 val on = p == preset
@@ -391,17 +423,17 @@ fun GestureGuide(onDone: () -> Unit) {
         Column(Modifier.align(Alignment.Center).padding(top = 120.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             when (step) {
                 0 -> Row(horizontalArrangement = Arrangement.spacedBy(110.dp)) {
-                    GuideItem(QtIcons.LightMode, "Brightness", "↕")
-                    GuideItem(QtIcons.VolumeUp, "Volume", "↕")
+                    GuideItem(QtIcons.PBrightness, "Brightness", "↕")
+                    GuideItem(QtIcons.PVolume, "Volume", "↕")
                 }
                 1 -> Row(horizontalArrangement = Arrangement.spacedBy(30.dp)) {
-                    GuideItem(QtIcons.FastRewind, "Rewind -10s", "×2")
-                    GuideItem(QtIcons.Pause, "Pause/Play", "×2")
-                    GuideItem(QtIcons.FastForward, "Fast Forward\n+10s", "×2")
+                    GuideItem(QtIcons.PFastRewind, "Rewind -10s", "×2")
+                    GuideItem(QtIcons.PPause, "Pause/Play", "×2")
+                    GuideItem(QtIcons.PFastForward, "Fast Forward\n+10s", "×2")
                 }
-                2 -> GuideItem(QtIcons.FastForward, "2.0X", "Hold")
+                2 -> GuideItem(QtIcons.PFastForward, "2.0X", "Hold")
                 3 -> GuideItem(QtIcons.FitScreen, "Zoom In/Out", "Pinch")
-                else -> GuideItem(QtIcons.TouchApp, "Move", "Drag")
+                else -> GuideItem(QtIcons.PGesture, "Move", "Drag")
             }
             Spacer(Modifier.height(48.dp))
             Box(

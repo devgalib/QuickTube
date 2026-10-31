@@ -9,6 +9,14 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.graphics.Color
+import com.edureminder.quicktube.core.navigation.GALLERY_AUDIOS
+import com.edureminder.quicktube.core.navigation.GALLERY_VIDEOS
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -88,7 +96,9 @@ fun GalleryScreen(
     val (access, requestAccess) = rememberGalleryAccess()
     LaunchedEffect(access) { if (access != GalleryAccess.NONE) vm.load(force = true) }
 
-    var page by rememberSaveable { mutableStateOf(0) }
+    // Photos and Albums are two pages: swipe between them or tap the switch.
+    val pager = rememberPagerState { 2 }
+    val scope = rememberCoroutineScope()
     var selection by remember { mutableStateOf<Set<Long>?>(null) }
     val photosState = rememberLazyGridState()
     val albumsState = rememberLazyGridState()
@@ -100,9 +110,12 @@ fun GalleryScreen(
     }
     BackHandler(selecting) { selection = null }
 
-    val gridState = if (page == 0) photosState else albumsState
-    val collapsed by remember(gridState) {
-        derivedStateOf { gridState.firstVisibleItemIndex > 0 || gridState.firstVisibleItemScrollOffset > 24 }
+    val page = pager.currentPage
+    val collapsed by remember {
+        derivedStateOf {
+            val g = if (pager.currentPage == 0) photosState else albumsState
+            g.firstVisibleItemIndex > 0 || g.firstVisibleItemScrollOffset > 24
+        }
     }
     val title = if (page == 0) "Photos" else "Albums"
 
@@ -113,7 +126,13 @@ fun GalleryScreen(
                 collapsed = collapsed,
                 selectionCount = selection?.size,
                 onCloseSelection = { selection = null },
-                trailing = { if (access != GalleryAccess.NONE) PhotosAlbumsSwitch(page) { page = it; selection = null } },
+                trailing = {
+                    if (access != GalleryAccess.NONE) PhotosAlbumsSwitch(
+                        position = { pager.currentPage + pager.currentPageOffsetFraction },
+                        selected = pager.targetPage,
+                        onSelect = { selection = null; scope.launch { pager.animateScrollToPage(it) } },
+                    )
+                },
             )
             if (access == GalleryAccess.NONE) {
                 GalleryPermissionPrompt(requestAccess, Modifier.padding(bottom = LocalBottomBarHeight.current))
@@ -121,9 +140,9 @@ fun GalleryScreen(
             }
             val bottom = LocalBottomBarHeight.current + 8.dp
             // The album grid has 16dp side margins of its own, so its title and banner drop theirs.
-            fun largeTitle(inset: Boolean): LazyGridScope.() -> Unit = {
+            fun largeTitle(text: String, inset: Boolean): LazyGridScope.() -> Unit = {
                 item(key = "title", span = { GridItemSpan(maxLineSpan) }, contentType = "title") {
-                    LargeTitle(if (selecting) "" else title, if (inset) 16.dp else 0.dp)
+                    LargeTitle(if (selecting) "" else text, if (inset) 16.dp else 0.dp)
                 }
                 if (access == GalleryAccess.PARTIAL) item(key = "partial", span = { GridItemSpan(maxLineSpan) }, contentType = "banner") {
                     PartialAccessBanner(requestAccess, margin = if (inset) 16.dp else 0.dp)
@@ -133,16 +152,18 @@ fun GalleryScreen(
                 EmptyBox("No photos or videos", "Pictures and videos on your phone appear here", Modifier.fillMaxWidth().padding(top = 96.dp), QtIcons.Gallery)
                 return@Column
             }
-            AnimatedContent(page, transitionSpec = { fadeIn(tween(160)) togetherWith fadeOut(tween(120)) }, label = "page") { p ->
+            HorizontalPager(
+                pager, Modifier.fillMaxSize(), beyondViewportPageCount = 1, userScrollEnabled = !selecting, key = { it },
+            ) { p ->
                 if (p == 0) {
                     MediaGrid(
                         ui, photosState, selection, { selection = it },
                         onOpen = { if (it.isVideo) onOpenVideo(it) else onOpenViewer(it) },
                         contentPadding = PaddingValues(bottom = bottom),
-                        top = largeTitle(inset = true),
+                        top = largeTitle("Photos", inset = true),
                     )
                 } else {
-                    AlbumsGrid(ui.albums, albumsState, onOpenAlbum, PaddingValues(start = 16.dp, end = 16.dp, bottom = bottom), largeTitle(inset = false))
+                    AlbumsGrid(ui.albums, albumsState, onOpenAlbum, PaddingValues(start = 16.dp, end = 16.dp, bottom = bottom), largeTitle("Albums", inset = false))
                 }
             }
         }
@@ -195,18 +216,18 @@ private fun LargeTitle(text: String, start: androidx.compose.ui.unit.Dp) {
     )
 }
 
-/** Photos | Albums segmented pill with a sliding accent thumb (the floating tab bar's look, in miniature). */
+/** Photos | Albums segmented pill whose accent thumb tracks the pager. */
 @Composable
-private fun PhotosAlbumsSwitch(selected: Int, onSelect: (Int) -> Unit) {
+private fun PhotosAlbumsSwitch(position: () -> Float, selected: Int, onSelect: (Int) -> Unit) {
     val cs = MaterialTheme.colorScheme
     val ex = LocalQtExtras.current
     val labels = listOf("Photos", "Albums")
-    val position by animateFloatAsState(selected.toFloat(), tween(220), label = "thumb")
     val segment = 68.dp
     val density = LocalDensity.current
     Box(Modifier.width(segment * 2 + 8.dp).height(34.dp).clip(CircleShape).background(cs.surfaceContainerHigh).padding(4.dp)) {
         Box(
-            Modifier.offset { IntOffset((position * with(density) { segment.toPx() }).roundToInt(), 0) }
+            // Follows the pager's live position, so the thumb slides with the finger while swiping.
+            Modifier.offset { IntOffset((position().coerceIn(0f, 1f) * with(density) { segment.toPx() }).roundToInt(), 0) }
                 .width(segment).fillMaxHeight().clip(CircleShape).background(ex.brand),
         )
         Row(Modifier.fillMaxSize()) {
@@ -254,7 +275,22 @@ private fun AlbumTile(album: GalleryAlbum, onOpen: (GalleryAlbum) -> Unit) {
             .selectable(false, onClick = { onOpen(album) }),
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(10.dp)).background(cs.surfaceContainerHigh)) {
-            GalleryThumbnail(album.cover, Modifier.fillMaxSize(), sizePx = 256)
+            val cover = album.cover
+            when {
+                album.bucketId == GALLERY_AUDIOS -> if (cover != null) AudioArt(cover, Modifier.fillMaxSize(), sizePx = 256, iconSize = 40.dp)
+                else Box(Modifier.fillMaxSize().background(LocalQtExtras.current.brand))
+                cover != null -> GalleryThumbnail(cover, Modifier.fillMaxSize(), sizePx = 256)
+            }
+            // Virtual albums carry a small badge so they read as "all photos / videos / audios", not a folder.
+            if (album.virtual) Box(
+                Modifier.align(Alignment.BottomStart).padding(7.dp).size(26.dp).clip(CircleShape).background(Color.Black.copy(alpha = 0.45f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    when (album.bucketId) { GALLERY_VIDEOS -> QtIcons.Videocam; GALLERY_AUDIOS -> QtIcons.MusicNote; else -> QtIcons.Image },
+                    null, tint = Color.White, modifier = Modifier.size(15.dp),
+                )
+            }
         }
         Text(
             album.name, Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodyLarge, fontSize = 15.sp, lineHeight = 19.sp,

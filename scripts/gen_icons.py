@@ -1,6 +1,6 @@
 import re, sys, urllib.request, os
 S=sys.argv[1]; OUT=sys.argv[2]
-# QtIcons name -> (material symbol, filled)
+# QtIcons name -> (material symbol, filled[, weight]). Weight 300 is the thinner set used by the video player.
 ICONS = {
  "Download":("download",0),"Close":("close",0),"Delete":("delete",0),"ArrowBack":("arrow_back",0),"Share":("share",0),
  "Play":("play_arrow",1),"MusicNote":("music_note",0),"Search":("search",0),"PlayCircle":("play_circle",1),"PlayCircleOutline":("play_circle",0),
@@ -31,6 +31,17 @@ ICONS = {
  "ContentCut":("content_cut",0),"HeadsetMic":("headset_mic",0),"FastForward":("fast_forward",1),"FastRewind":("fast_rewind",1),
  "LightMode":("light_mode",0),"PictureInPicture":("picture_in_picture",0),"Sync":("sync",0),"PlaylistAdd":("playlist_add",0),
  "Battery":("battery_full",0),"AudioTrack":("mic",0),
+ "PLockOpen":("lock_open_right",0,300),"PLock":("lock",0,300),"PVolume":("volume_up",0,300),"PMute":("volume_off",0,300),
+ "PPip":("picture_in_picture_alt",0,300),"PFit":("fit_screen",0,300),"PStretch":("settings_overscan",0,300),
+ "PCrop":("crop_square",0,300),"PSpeed":("slow_motion_video",0,300),"PHeadphones":("headphones",0,300),
+ "PRotate":("screen_rotation",0,300),"PCaption":("closed_caption",0,300),"PMore":("more_vert",0,300),
+ "PDown":("keyboard_arrow_down",0,300),"PBack":("arrow_back",0,300),"PPlay":("play_arrow",1,300),"PPause":("pause",1,300),
+ "PReplay10":("replay_10",0,300),"PForward10":("forward_10",0,300),"PFastForward":("fast_forward",1,300),
+ "PFastRewind":("fast_rewind",1,300),"PEqualizer":("graphic_eq",0,300),"PTimer":("timer",0,300),"PInfo":("info",0,300),
+ "PShare":("share",0,300),"PDelete":("delete",0,300),"PFavorite":("favorite",1,300),"PFavoriteBorder":("favorite",0,300),
+ "PGesture":("swipe",0,300),"PAudioTrack":("music_note",0,300),"PRepeat":("repeat",0,300),"PRepeatOne":("repeat_one",0,300),
+ "PShuffle":("shuffle",0,300),"PSkipNext":("skip_next",1,300),"PSkipPrevious":("skip_previous",1,300),
+ "PBrightness":("brightness_6",0,300),"PChevronRight":("chevron_right",0,300),"PSubtitles":("subtitles",0,300),
 }
 BRANDS = {"YouTube":"youtube","Instagram":"instagram","Facebook":"facebook","TikTok":"tiktok","X":"x","WhatsApp":"whatsapp","Dailymotion":"dailymotion","Vimeo":"vimeo","SoundCloud":"soundcloud","Google":"google"}
 
@@ -48,8 +59,11 @@ def d_of(svg):
     return " ".join(ds)
 
 lines=[]
-for name,(sym,fill) in ICONS.items():
-    suffix = "_fill1_24px" if fill else "_24px"
+for name,spec in ICONS.items():
+    sym, fill = spec[0], spec[1]
+    weight = spec[2] if len(spec) > 2 else None
+    if weight: suffix = f"_wght{weight}{'fill1' if fill else ''}_24px"
+    else: suffix = "_fill1_24px" if fill else "_24px"
     url=f"https://raw.githubusercontent.com/google/material-design-icons/master/symbols/web/{sym}/materialsymbolsrounded/{sym}{suffix}.svg"
     svg=fetch(url, f"{S}/icons/{sym}{suffix}.svg")
     if svg is None: continue

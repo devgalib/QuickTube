@@ -21,6 +21,8 @@ okhttp = "5.5.1"
 serialization = "1.12.0"
 coroutines = "1.10.2"
 media3 = "1.11.1"
+# Prebuilt FFmpeg audio decoders (AC-3, E-AC-3, DTS, TrueHD, WMA…) for Media3, by Jellyfin.
+media3Ffmpeg = "1.9.0+1"
 documentfile = "1.1.0"
 webkit = "1.18.0"
 ytdlp = "0.18.1"
@@ -71,6 +73,8 @@ androidx-media3-exoplayer-dash = { group = "androidx.media3", name = "media3-exo
 androidx-media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exoplayer-hls", version.ref = "media3" }
 androidx-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 androidx-media3-ui-compose = { group = "androidx.media3", name = "media3-ui-compose", version.ref = "media3" }
+media3-ffmpeg-decoder = { group = "org.jellyfin.media3", name = "media3-ffmpeg-decoder", version.ref = "media3Ffmpeg" }
+androidx-media3-inspector = { group = "androidx.media3", name = "media3-inspector", version.ref = "media3" }
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 koin-bom = { group = "io.insert-koin", name = "koin-bom", version.ref = "koin" }
 koin-android = { group = "io.insert-koin", name = "koin-android" }

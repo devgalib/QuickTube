@@ -11,6 +11,7 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -34,7 +35,11 @@ class PlaybackService : MediaSessionService() {
             .setUserAgent(USER_AGENT)
             .setAllowCrossProtocolRedirects(true)
         val dataSource = DefaultDataSource.Factory(this, ChunkedHttpDataSource.Factory(http))
-        val player = ExoPlayer.Builder(this)
+        // Phone decoders first; FFmpeg only for audio the phone can't decode (else such files play silently).
+        val renderers = DefaultRenderersFactory(this)
+            .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
+            .setEnableDecoderFallback(true)
+        val player = ExoPlayer.Builder(this, renderers)
             .setMediaSourceFactory(SplitStreamSourceFactory(DefaultMediaSourceFactory(dataSource), dataSource))
             .setAudioAttributes(
                 AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),

@@ -17,16 +17,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.edureminder.quicktube.core.model.GalleryMedia
+import com.edureminder.quicktube.core.navigation.GALLERY_AUDIOS
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.parameter.parametersOf
 
-/** One folder: back + name in the toolbar, then the same month-grouped grid as Photos. */
+/** One folder or virtual album: back + name in the toolbar, then the month-grouped grid (or the audio list). */
 @Composable
 fun AlbumScreen(
     bucketId: Long,
     name: String,
     onBack: () -> Unit,
     onOpenViewer: (GalleryMedia) -> Unit,
+    /** Opens the player for a video or audio file. */
     onOpenVideo: (GalleryMedia) -> Unit,
 ) {
     val vm = koinViewModel<GalleryViewModel>(key = "gallery-$bucketId") { parametersOf(bucketId) }
@@ -38,10 +40,12 @@ fun AlbumScreen(
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             GalleryToolbar(name, collapsed = true, selectionCount = selection?.size, onCloseSelection = { selection = null }, onBack = onBack)
-            MediaGrid(
+            val bottom = PaddingValues(bottom = if (selection != null) 96.dp else 0.dp)
+            if (bucketId == GALLERY_AUDIOS) AudioList(ui.items, selection, { selection = it }, onOpenVideo, bottom)
+            else MediaGrid(
                 ui, state, selection, { selection = it },
-                onOpen = { if (it.isVideo) onOpenVideo(it) else onOpenViewer(it) },
-                contentPadding = PaddingValues(bottom = if (selection != null) 96.dp else 0.dp),
+                onOpen = { if (it.isPhoto) onOpenViewer(it) else onOpenVideo(it) },
+                contentPadding = bottom,
             )
         }
         selection?.let { sel ->

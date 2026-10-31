@@ -32,8 +32,10 @@ import kotlinx.serialization.Serializable
 /** Full-screen viewer starting at [mediaId], paging through one album ([bucketId]) or everything ([GALLERY_ALL]). */
 @Serializable data class GalleryViewerRoute(val mediaId: Long, val bucketId: Long = GALLERY_ALL)
 const val GALLERY_ALL = Long.MIN_VALUE
-/** Video player for gallery videos: [mediaId] first, the other videos of the album (or everything) in its strip. */
-@Serializable data class GalleryPlayerRoute(val mediaId: Long, val bucketId: Long = GALLERY_ALL)
+/** Virtual albums: one kind of media from every folder. They exist only in the gallery, not on disk. */
+const val GALLERY_PHOTOS = Long.MIN_VALUE + 1
+const val GALLERY_VIDEOS = Long.MIN_VALUE + 2
+const val GALLERY_AUDIOS = Long.MIN_VALUE + 3
 
 // Settings
 @Serializable data object DownloadSettingsRoute

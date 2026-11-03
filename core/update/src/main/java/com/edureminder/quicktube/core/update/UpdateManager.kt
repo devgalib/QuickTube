@@ -16,7 +16,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -30,7 +29,8 @@ sealed interface UpdateState {
     /** Android 8+: the user must allow "install unknown apps" for QuickTube first. */
     data class NeedsPermission(val info: UpdateInfo) : UpdateState
     data class Downloading(val info: UpdateInfo, val bytes: Long, val total: Long) : UpdateState
-    data class Installing(val info: UpdateInfo) : UpdateState
+    /** Handed to Android's installer; [needsTap] when Android waits for the user to confirm (its dialog, or our notification). */
+    data class Installing(val info: UpdateInfo, val needsTap: Boolean = false) : UpdateState
     data class Failed(val info: UpdateInfo?, val message: String) : UpdateState
 }
 
@@ -49,6 +49,23 @@ class UpdateManager(
     private val _state = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val state: StateFlow<UpdateState> = _state
     private var job: Job? = null
+    /** Android's "Install this update?" screen, kept while it's waiting for the user. */
+    @Volatile private var confirmIntent: Intent? = null
+    /** Activities of this app on screen (for showing Android's install screen now, or a notification instead). */
+    @Volatile private var started = 0
+    val appVisible get() = started > 0
+
+    init {
+        (context.applicationContext as? android.app.Application)?.registerActivityLifecycleCallbacks(object : android.app.Application.ActivityLifecycleCallbacks {
+            override fun onActivityStarted(a: android.app.Activity) { started++ }
+            override fun onActivityStopped(a: android.app.Activity) { started = (started - 1).coerceAtLeast(0) }
+            override fun onActivityCreated(a: android.app.Activity, b: android.os.Bundle?) {}
+            override fun onActivityResumed(a: android.app.Activity) {}
+            override fun onActivityPaused(a: android.app.Activity) {}
+            override fun onActivitySaveInstanceState(a: android.app.Activity, b: android.os.Bundle) {}
+            override fun onActivityDestroyed(a: android.app.Activity) {}
+        })
+    }
 
     /** Whether the sheet should be shown (user hasn't dismissed this version for now). */
     private val _promptVisible = MutableStateFlow(false)
@@ -68,6 +85,14 @@ class UpdateManager(
             return
         }
         check(userInitiated = false)
+    }
+
+    /** Settings → "Check for updates": shows the update in progress, or checks. */
+    fun checkOrShow() {
+        when (_state.value) {
+            is UpdateState.Downloading, is UpdateState.Installing, is UpdateState.NeedsPermission, is UpdateState.Available -> _promptVisible.value = true
+            else -> check(userInitiated = true)
+        }
     }
 
     /** Settings → "Check for updates". */
@@ -127,7 +152,20 @@ class UpdateManager(
         _promptVisible.value = true
     }
 
-    fun later() { _promptVisible.value = false; if (_state.value !is UpdateState.Downloading) _state.value = UpdateState.Idle }
+    /** Closes the sheet. A download or install in progress goes on in the background (notification bar). */
+    fun later() {
+        _promptVisible.value = false
+        val s = _state.value
+        if (s !is UpdateState.Downloading && s !is UpdateState.Installing) _state.value = UpdateState.Idle
+    }
+
+    /** Stops the download; the update stays available. */
+    fun cancel() {
+        val info = when (val s = _state.value) { is UpdateState.Downloading -> s.info; is UpdateState.Installing -> s.info; else -> null }
+        job?.cancel()
+        prefs.edit().remove(KEY_RESUME).apply()
+        if (info != null) _state.value = UpdateState.Available(info)
+    }
 
     fun skip(info: UpdateInfo) {
         prefs.edit().putLong(KEY_SKIPPED, info.versionCode).apply()
@@ -142,35 +180,104 @@ class UpdateManager(
     fun permissionIntent(): Intent =
         Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, android.net.Uri.parse("package:${context.packageName}"))
 
-    /** "Update now": download, verify and hand to the system installer. */
-    fun start(info: UpdateInfo) {
+    /**
+     * "Update now": download (in the background, progress in the notification bar), verify and hand to Android's
+     * installer. Without the install permission it returns false and remembers the update, so it continues by itself
+     * once the permission is granted, even if Android restarted the app meanwhile ([resumeIfPending]).
+     */
+    fun start(info: UpdateInfo): Boolean {
         _promptVisible.value = true
-        if (!canInstall()) { _state.value = UpdateState.NeedsPermission(info); return }
-        if (job?.isActive == true) return
+        if (!canInstall()) {
+            prefs.edit().putLong(KEY_RESUME, info.versionCode).apply()
+            _state.value = UpdateState.NeedsPermission(info)
+            return false
+        }
+        prefs.edit().remove(KEY_RESUME).apply()
+        if (job?.isActive == true) return true
+        _state.value = UpdateState.Downloading(info, 0, info.apkSize)
+        UpdateService.start(context)
         job = scope.launch {
             runCatching {
                 val apk = download(info)
                 verify(apk, info)
                 _state.value = UpdateState.Installing(info)
-                withContext(Dispatchers.Main) { UpdateInstaller.install(context, apk) }
+                prefs.edit().putLong(KEY_INSTALL_STARTED, System.currentTimeMillis()).putString(KEY_INSTALL_VERSION, info.versionName).apply()
+                val screen = UpdateInstaller.installerScreen(context, apk)
+                // Writing the APK into an installer session takes seconds: never on the main thread (it froze the app).
+                if (screen != null) onConfirmNeeded(screen) else UpdateInstaller.install(context, apk)
             }.onFailure { e ->
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 Log.w(TAG, "update failed", e)
                 _state.value = UpdateState.Failed(info, e.message ?: "Update failed")
+                _promptVisible.value = true
             }
         }
+        return true
     }
 
-    /** Back from the permission screen: continue automatically if it was granted. */
-    fun onPermissionResult() {
+    /**
+     * On every return to the app: an update waiting for the install permission continues once it's granted. Android
+     * often restarts the app when that permission changes, so the pending update is remembered on disk.
+     */
+    fun resumeIfPending() {
         val s = _state.value
-        if (s is UpdateState.NeedsPermission && canInstall()) start(s.info)
+        if (s is UpdateState.NeedsPermission) { if (canInstall()) start(s.info); return }
+        val pending = prefs.getLong(KEY_RESUME, -1)
+        if (pending <= 0 || job?.isActive == true) return
+        val info = prefs.getString(KEY_CACHED, null)?.let(::parse)?.takeIf { it.versionCode == pending && it.versionCode > currentVersionCode }
+        if (info == null) { prefs.edit().remove(KEY_RESUME).apply(); return }
+        if (canInstall()) start(info) else { _state.value = UpdateState.NeedsPermission(info); _promptVisible.value = true }
+    }
+
+    /** Android's "Install this update?" screen is waiting: show it now when the app is on screen, else notify. */
+    internal fun onConfirmNeeded(confirm: Intent) {
+        val info = (_state.value as? UpdateState.Installing)?.info
+        confirmIntent = confirm
+        if (info != null) _state.value = UpdateState.Installing(info, needsTap = true)
+        if (appVisible && runCatching { context.startActivity(Intent(confirm).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }.isSuccess) return
+        UpdateNotifier.ready(context, info?.versionName.orEmpty(), Intent(confirm))
+    }
+
+    /** The sheet's "Install" button: shows Android's install screen again (e.g. after it was dismissed). */
+    fun confirmInstall() {
+        val c = confirmIntent ?: return
+        runCatching { context.startActivity(Intent(c).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
     }
 
     internal fun onInstallFailed(message: String) {
         val info = (_state.value as? UpdateState.Installing)?.info
+        confirmIntent = null
+        prefs.edit().remove(KEY_INSTALL_STARTED).apply()
+        UpdateNotifier.cancel(context, UpdateNotifier.ID_READY)
         _state.value = UpdateState.Failed(info, message)
         _promptVisible.value = true
+    }
+
+    /**
+     * Runs in the new version right after it replaced this one (when the phone delivers it: some limit apps started
+     * in the background). After an update started in the app, a "QuickTube updated · tap to open" notification is
+     * left; Android's installer screen itself ends with an "Open" button.
+     */
+    internal fun onReplaced() {
+        cleanUpInstalledUpdates()
+        UpdateNotifier.cancel(context, UpdateNotifier.ID_READY)
+        UpdateNotifier.cancel(context, UpdateNotifier.ID_PROGRESS)
+        val at = prefs.getLong(KEY_INSTALL_STARTED, 0)
+        prefs.edit().remove(KEY_INSTALL_STARTED).remove(KEY_RESUME).apply()
+        if (System.currentTimeMillis() - at <= RELAUNCH_WINDOW_MS && !appVisible) UpdateNotifier.updated(context, currentVersionName)
+    }
+
+    /**
+     * The installer's "done" (PackageInstaller session path), received by the new version with permission to open an
+     * activity: QuickTube opens again by itself.
+     */
+    internal fun onInstalled() {
+        onReplaced()
+        UpdateNotifier.cancel(context, UpdateNotifier.ID_DONE)
+        context.packageManager.getLaunchIntentForPackage(context.packageName)?.let { launch ->
+            runCatching { context.startActivity(launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                .onFailure { Log.w(TAG, "Couldn't reopen after the update: $it"); UpdateNotifier.updated(context, currentVersionName) }
+        }
     }
 
     private suspend fun download(info: UpdateInfo): File {
@@ -257,5 +364,11 @@ class UpdateManager(
         private const val KEY_CACHED = "cached_release"
         private const val KEY_LAST_RUN = "last_run_version"
         private const val CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000L
+        /** Version waiting for the install permission (survives Android restarting the app). */
+        private const val KEY_RESUME = "resume_version"
+        /** When this app handed an update to the installer: the new version reopens the app only right after that. */
+        private const val KEY_INSTALL_STARTED = "install_started"
+        private const val KEY_INSTALL_VERSION = "install_version"
+        private const val RELAUNCH_WINDOW_MS = 15 * 60 * 1000L
     }
 }

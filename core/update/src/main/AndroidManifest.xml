@@ -3,8 +3,16 @@
     <!-- Lets the app install its own updates downloaded from GitHub Releases (Android asks the user once). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- The update download keeps going in the background, with its progress in the notification bar. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application>
+        <service
+            android:name=".UpdateService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <receiver
             android:name=".UpdateInstallReceiver"
             android:exported="false" />

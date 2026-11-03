@@ -49,10 +49,16 @@ fun UpdatePrompt() {
     val visible by manager.promptVisible.collectAsStateWithLifecycle()
     val state by manager.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
-    // Coming back from Android's "Install unknown apps" screen continues the update by itself.
+    // Coming back from Android's "Install unknown apps" screen continues the update by itself (also after Android
+    // restarted the app for that permission change).
     LifecycleResumeEffect(Unit) {
-        manager.onPermissionResult()
+        manager.resumeIfPending()
         onPauseOrDispose {}
+    }
+    // "Update now" without the install permission goes straight to Android's switch for it.
+    val update = { i: UpdateInfo ->
+        if (!manager.start(i)) runCatching { context.startActivity(manager.permissionIntent()) }
+        Unit
     }
     if (!visible) return
     val info = when (val s = state) {
@@ -63,10 +69,10 @@ fun UpdatePrompt() {
         is UpdateState.Failed -> s.info
         else -> null
     } ?: return
-    val busy = state is UpdateState.Downloading || state is UpdateState.Installing
+    // Closing the sheet never stops anything: a download goes on in the background (notification bar).
     ModalBottomSheet(
-        onDismissRequest = { if (!busy) manager.later() },
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true, confirmValueChange = { !busy }),
+        onDismissRequest = { manager.later() },
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp).padding(bottom = 20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -93,15 +99,33 @@ fun UpdatePrompt() {
             Box(Modifier.padding(top = 22.dp)) {
                 AnimatedContent(state, transitionSpec = { fadeIn() togetherWith fadeOut() }, contentKey = { it::class }, label = "update") { s ->
                     when (s) {
-                        is UpdateState.Downloading -> Progress(
-                            if (s.total > 0) s.bytes.toFloat() / s.total else 0f,
-                            "Downloading… " + Format.bytes(s.bytes) + if (s.total > 0) " of ${Format.bytes(s.total)}" else "",
-                        )
-                        is UpdateState.Installing -> Progress(1f, "Installing… confirm in the Android dialog if asked")
+                        is UpdateState.Downloading -> Column {
+                            Progress(
+                                if (s.total > 0) s.bytes.toFloat() / s.total else 0f,
+                                "Downloading… " + Format.bytes(s.bytes) + if (s.total > 0) " of ${Format.bytes(s.total)}" else "",
+                            )
+                            Text(
+                                "You can keep using QuickTube: the download goes on in the background, with its progress in the notification bar.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                            )
+                            PillButton("Continue in background", { manager.later() }, Modifier.fillMaxWidth().padding(top = 16.dp), secondary = true)
+                            Box(Modifier.fillMaxWidth().padding(top = 4.dp), contentAlignment = Alignment.Center) { TextAction("Cancel download") { manager.cancel() } }
+                        }
+                        is UpdateState.Installing -> Column {
+                            Progress(1f, if (s.needsTap) "Ready to install" else "Installing…")
+                            if (s.needsTap) PillButton("Install", { manager.confirmInstall() }, Modifier.fillMaxWidth().padding(top = 16.dp), icon = QtIcons.Download)
+                            Text(
+                                if (s.needsTap) "Android shows the install screen: tap Install, then Open when it's done. If you closed it, tap Install here."
+                                else "Android is installing the update. QuickTube closes meanwhile; tap Open on Android's screen to come back.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                            )
+                        }
                         is UpdateState.NeedsPermission -> Column {
                             Text(
-                                "To install updates, Android needs you to allow QuickTube to install apps. Turn on " +
-                                    "\"Allow from this source\" on the next screen, then come back. The update continues by itself.",
+                                "Android needs your OK once to let QuickTube install its updates. Turn on " +
+                                    "\"Allow from this source\", then come back: the update continues by itself.",
                                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             PillButton("Allow installs", { context.startActivity(manager.permissionIntent()) },
@@ -110,11 +134,11 @@ fun UpdatePrompt() {
                         }
                         is UpdateState.Failed -> Column {
                             Text(s.message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
-                            PillButton("Try again", { manager.start(info) }, Modifier.fillMaxWidth().padding(top = 16.dp), icon = QtIcons.Refresh)
+                            PillButton("Try again", { update(info) }, Modifier.fillMaxWidth().padding(top = 16.dp), icon = QtIcons.Refresh)
                             Later(manager)
                         }
                         else -> Column {
-                            PillButton("Update now", { manager.start(info) }, Modifier.fillMaxWidth(), icon = QtIcons.Download)
+                            PillButton("Update now", { update(info) }, Modifier.fillMaxWidth(), icon = QtIcons.Download)
                             Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
                                 TextAction("Later") { manager.later() }
                                 TextAction("Skip this version") { manager.skip(info) }

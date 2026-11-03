@@ -71,6 +71,9 @@ fun SettingsScreen(actions: SettingsActions) {
         is com.edureminder.quicktube.core.update.UpdateState.Checking -> "Checking…"
         is com.edureminder.quicktube.core.update.UpdateState.UpToDate -> "You're on the latest version"
         is com.edureminder.quicktube.core.update.UpdateState.Failed -> "Couldn't check. Tap to try again"
+        is com.edureminder.quicktube.core.update.UpdateState.Downloading -> (updateState as com.edureminder.quicktube.core.update.UpdateState.Downloading)
+            .let { d -> "Downloading update… " + if (d.total > 0) "${d.bytes * 100 / d.total}%" else "" }
+        is com.edureminder.quicktube.core.update.UpdateState.Installing -> "Installing update…"
         else -> "Version ${appVersion(context)}"
     }
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding(), contentPadding = PaddingValues(bottom = 24.dp + LocalBottomBarHeight.current)) {
@@ -143,7 +146,7 @@ fun SettingsScreen(actions: SettingsActions) {
                     ), "Share QuickTube"))
                 }
                 RowDivider()
-                NavRow(QtIcons.Downloading, "Check for updates", updateSummary, tint = Teal) { updates.check(userInitiated = true) }
+                NavRow(QtIcons.Downloading, "Check for updates", updateSummary, tint = Teal) { updates.checkOrShow() }
                 RowDivider()
                 NavRow(QtIcons.Info, "About", trailing = "v" + appVersion(context), tint = Blue, onClick = actions.about)
             }

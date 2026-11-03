@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.background
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
@@ -56,6 +58,7 @@ import com.edureminder.quicktube.feature.home.HomeActions
 import com.edureminder.quicktube.feature.gallery.AlbumScreen
 import com.edureminder.quicktube.feature.gallery.GalleryScreen
 import com.edureminder.quicktube.feature.gallery.ViewerScreen
+import com.edureminder.quicktube.feature.gallery.editor.PhotoEditorScreen
 import com.edureminder.quicktube.player.GalleryPlayerActivity
 import com.edureminder.quicktube.player.FloatingPlayerActivity
 import com.edureminder.quicktube.core.designsystem.LocalBottomBarHidden
@@ -155,9 +158,10 @@ fun AppNavHost(nav: NavHostController) {
             exitTransition = QtTransitions.pushExit,
             popEnterTransition = QtTransitions.popEnter,
             popExitTransition = QtTransitions.popExit,
-            // No predictive-back "shrinking card": a back gesture plays the same plain transition as the back button.
-            predictivePopEnterTransition = { QtTransitions.popEnter(this) },
-            predictivePopExitTransition = { QtTransitions.popExit(this) },
+            // No predictive back. Android 16 ignores the app's opt-out for apps targeting it, so the gesture's progress
+            // must not drive any animation here: the screen stays still while the finger moves, then simply goes back.
+            predictivePopEnterTransition = { EnterTransition.None },
+            predictivePopExitTransition = { ExitTransition.None },
         ) {
             composable<HomeRoute>(
                 enterTransition = QtTransitions.tabEnter, exitTransition = QtTransitions.tabExit,
@@ -222,8 +226,10 @@ fun AppNavHost(nav: NavHostController) {
                 popExitTransition = { fadeOut(tween(200)) + scaleOut(tween(220), targetScale = 0.94f) },
             ) { e ->
                 val r = e.toRoute<GalleryViewerRoute>()
-                ViewerScreen(r.mediaId, r.bucketId, onBack = nav::popBackStack, onOpenVideo = { GalleryPlayerActivity.start(context, it.id) })
+                ViewerScreen(r.mediaId, r.bucketId, onBack = nav::popBackStack, onOpenVideo = { GalleryPlayerActivity.start(context, it.id) },
+                    onEditPhoto = { nav.navigate(PhotoEditorRoute(it.id)) })
             }
+            composable<PhotoEditorRoute> { e -> PhotoEditorScreen(e.toRoute<PhotoEditorRoute>().mediaId, onBack = nav::popBackStack) }
             composable<SettingsRoute>(
                 enterTransition = QtTransitions.tabEnter, exitTransition = QtTransitions.tabExit,
                 popEnterTransition = QtTransitions.tabEnter, popExitTransition = QtTransitions.tabExit,

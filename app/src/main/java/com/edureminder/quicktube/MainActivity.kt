@@ -77,6 +77,10 @@ class MainActivity : ComponentActivity() {
                 onDispose {}
             }
             AppTheme(s) {
+                // Back on the first screen: leave like the home button would. Handled here (registered before the
+                // screens' own handlers, so it only runs when none of them does), Android has no back gesture left to
+                // animate with its shrinking "back to home" card.
+                androidx.activity.compose.BackHandler { moveTaskToBack(true) }
                 AppNavHost(nav)
                 UpdatePrompt()
             }

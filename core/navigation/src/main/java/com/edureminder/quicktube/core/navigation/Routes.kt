@@ -34,6 +34,8 @@ import kotlinx.serialization.Serializable
 @Serializable data class GalleryAlbumRoute(val bucketId: Long, val name: String)
 /** Full-screen viewer starting at [mediaId], paging through one album ([bucketId]) or everything ([GALLERY_ALL]). */
 @Serializable data class GalleryViewerRoute(val mediaId: Long, val bucketId: Long = GALLERY_ALL)
+/** The photo editor for one picture. */
+@Serializable data class PhotoEditorRoute(val mediaId: Long)
 const val GALLERY_ALL = Long.MIN_VALUE
 /** Virtual albums: one kind of media from every folder. They exist only in the gallery, not on disk. */
 const val GALLERY_PHOTOS = Long.MIN_VALUE + 1

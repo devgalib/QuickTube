@@ -45,6 +45,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -81,6 +82,8 @@ fun ViewerScreen(
     bucketId: Long,
     onBack: () -> Unit,
     onOpenVideo: (GalleryMedia) -> Unit,
+    /** The app's photo editor (videos use the phone's editor). */
+    onEditPhoto: (GalleryMedia) -> Unit = {},
 ) {
     val vm = koinViewModel<GalleryViewModel>(key = "viewer-$bucketId") { parametersOf(bucketId) }
     val ui by vm.ui.collectAsStateWithLifecycle()
@@ -92,12 +95,12 @@ fun ViewerScreen(
             return@Box
         }
         val start = remember { items.indexOfFirst { it.id == mediaId }.coerceAtLeast(0) }
-        Viewer(items, start, onBack, onPlay = onOpenVideo)
+        Viewer(items, start, onBack, onPlay = onOpenVideo, onEditPhoto = onEditPhoto)
     }
 }
 
 @Composable
-private fun Viewer(items: List<GalleryMedia>, start: Int, onBack: () -> Unit, onPlay: (GalleryMedia) -> Unit) {
+private fun Viewer(items: List<GalleryMedia>, start: Int, onBack: () -> Unit, onPlay: (GalleryMedia) -> Unit, onEditPhoto: (GalleryMedia) -> Unit) {
     val context = LocalContext.current
     val pager = rememberPagerState(start) { items.size }
     var chrome by rememberSaveable { mutableStateOf(true) }
@@ -126,7 +129,7 @@ private fun Viewer(items: List<GalleryMedia>, start: Int, onBack: () -> Unit, on
             ViewerBottomBar(
                 current,
                 onShare = { GalleryActions.share(context, listOf(current)) },
-                onEdit = { GalleryActions.edit(context, current) },
+                onEdit = { if (current.isPhoto) onEditPhoto(current) else GalleryActions.edit(context, current) },
                 onDelete = { delete(listOf(current)) },
                 onDetails = { details = current },
             )
@@ -242,23 +245,38 @@ private fun DetailsDialog(media: GalleryMedia, onDismiss: () -> Unit) {
     )
 }
 
+/**
+ * Light bar icons while this dark screen is shown; on leaving, the app theme's style. Screens hand over during a
+ * transition (the next one starts before the last one is gone), so it's set again once that transition is over.
+ */
+@Composable
+internal fun DarkSystemBars(controller: androidx.core.view.WindowInsetsControllerCompat) {
+    val lightTheme = androidx.compose.material3.MaterialTheme.colorScheme.background.luminance() > 0.5f
+    DisposableEffect(controller) {
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+        onDispose {
+            controller.isAppearanceLightStatusBars = lightTheme
+            controller.isAppearanceLightNavigationBars = lightTheme
+        }
+    }
+    LaunchedEffect(controller) {
+        kotlinx.coroutines.delay(450)
+        controller.isAppearanceLightStatusBars = false
+        controller.isAppearanceLightNavigationBars = false
+    }
+}
+
 /** Hides the status and navigation bars while the viewer's own bars are hidden; light icons on the black page. */
 @Composable
 internal fun ImmersiveBars(visible: Boolean) {
     val window = LocalActivity.current?.window ?: return
     val view = LocalView.current
     val controller = remember(window, view) { WindowCompat.getInsetsController(window, view) }
+    DarkSystemBars(controller)
     DisposableEffect(controller) {
-        val lightStatus = controller.isAppearanceLightStatusBars
-        val lightNav = controller.isAppearanceLightNavigationBars
-        controller.isAppearanceLightStatusBars = false
-        controller.isAppearanceLightNavigationBars = false
         controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-        onDispose {
-            controller.show(WindowInsetsCompat.Type.systemBars())
-            controller.isAppearanceLightStatusBars = lightStatus
-            controller.isAppearanceLightNavigationBars = lightNav
-        }
+        onDispose { controller.show(WindowInsetsCompat.Type.systemBars()) }
     }
     LaunchedEffect(visible) {
         if (visible) controller.show(WindowInsetsCompat.Type.systemBars()) else controller.hide(WindowInsetsCompat.Type.systemBars())

@@ -37,12 +37,7 @@ internal class LibraryRepositoryImpl(
         val now = System.currentTimeMillis()
         // Remember what was deleted so it can be downloaded again later.
         history.insertAll(
-            ids.mapNotNull { dao.get(it) }.filter { it.status == com.edureminder.quicktube.core.model.DownloadStatus.COMPLETED }.map { e ->
-                DeletedHistoryEntity(
-                    title = e.title, pageUrl = e.pageUrl, url = e.url, thumbnail = e.thumbnail, mimeType = e.mimeType, quality = e.quality,
-                    sizeBytes = e.totalBytes, durationSec = e.durationSec, deletedAt = now,
-                )
-            },
+            ids.mapNotNull { dao.get(it) }.filter { it.status == com.edureminder.quicktube.core.model.DownloadStatus.COMPLETED }.map { it.toHistory(now) },
         )
         ids.forEach { id ->
             dao.get(id)?.let { e ->
@@ -55,6 +50,21 @@ internal class LibraryRepositoryImpl(
         }
         dao.delete(ids)
     }
+
+    override suspend fun archiveMissing(): Int = withContext(Dispatchers.IO) {
+        val gone = dao.byStatus(listOf(com.edureminder.quicktube.core.model.DownloadStatus.COMPLETED))
+            .filter { !it.inVault && !File(it.filePath).exists() }
+        if (gone.isEmpty()) return@withContext 0
+        val now = System.currentTimeMillis()
+        history.insertAll(gone.map { it.toHistory(now) })
+        dao.delete(gone.map { it.id })
+        gone.size
+    }
+
+    private fun com.edureminder.quicktube.core.database.DownloadEntity.toHistory(now: Long) = DeletedHistoryEntity(
+        title = title, pageUrl = pageUrl, url = url, thumbnail = thumbnail, mimeType = mimeType, quality = quality,
+        sizeBytes = totalBytes, durationSec = durationSec, deletedAt = now,
+    )
 
     override suspend fun purgeExpiredTrash() {
         val before = System.currentTimeMillis() - TimeUnit.DAYS.toMillis(TRASH_DAYS)

@@ -103,7 +103,7 @@ jobs:
         run: |
           tag="v${{ steps.version.outputs.name }}"
           universal="dist/QuickTube-$tag.apk"
-          prev=$(gh release list --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)
+          prev=$(gh release list --exclude-pre-releases --limit 1 --json tagName -q '.[0].tagName' 2>/dev/null || true)
           args=(--target "${{ github.sha }}" --title "QuickTube $tag" --generate-notes)
           [ -n "$prev" ] && args+=(--notes-start-tag "$prev")
           # Built as a draft (invisible to apps), universal APK uploaded last, one file at a time: versions up to

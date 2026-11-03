@@ -74,7 +74,9 @@ import androidx.webkit.WebViewFeature
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.edureminder.quicktube.core.common.Urls
 import com.edureminder.quicktube.core.playerui.findActivity
+import com.edureminder.quicktube.core.playerui.PipState
 import kotlinx.coroutines.delay
+import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
 
 private val YT_WATCH = Regex("""youtube\.com/(watch\?|shorts/)|youtu\.be/""")
@@ -199,6 +201,7 @@ fun BrowserScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
     val saved by vm.bookmarked.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val koinPlayer = koinInject<com.edureminder.quicktube.core.media.PlayerController>()
     var webView by remember { mutableStateOf<WebView?>(null) }
     var editing by remember { mutableStateOf(false) }
     var address by remember { mutableStateOf("") }
@@ -208,7 +211,9 @@ fun BrowserScreen(
 
     val isNative = YT_WATCH.containsMatchIn(ui.url)
     // Only when the user is on a video and it is playing — never on listing/home pages.
-    val canDownload = isNative || ui.mainVideo != null || ui.pageMedia != null
+    // Instagram posts offer their photos too, so the button shows before (or without) any video playing.
+    val canDownload = isNative || ui.mainVideo != null || ui.pageMedia != null ||
+        com.edureminder.quicktube.core.extractor.InstagramReader.shortcode(ui.url) != null
 
     BackHandler {
         when {
@@ -303,6 +308,8 @@ fun BrowserScreen(
                         // Ad scripts open pop-ups/pop-unders on any tap; only real links the user tapped may open.
                         settings.javaScriptCanOpenWindowsAutomatically = false
                         settings.setSupportMultipleWindows(true)
+                        // Sign-ins (Facebook, Instagram…) live in the WebView's own cookie store; QuickTube never sees passwords.
+                        CookieManager.getInstance().setAcceptCookie(true)
                         CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
                         // Run the detector in every frame (embedded players live in iframes) from the very start.
                         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -363,6 +370,9 @@ fun BrowserScreen(
 
                             override fun onPageFinished(view: WebView, url: String) {
                                 vm.onPageFinished(url, view.title)
+                                // The WebView writes cookies to disk only every ~30 s: a sign-in followed by closing the app
+                                // (swiped away, killed in the background) would be lost. Save them as soon as a page is in.
+                                CookieManager.getInstance().flush()
                                 if (silent) view.evaluateJavascript(SILENT_JS, null)
                                 view.evaluateJavascript(SNIFF_JS, null)
                                 grabHtml(view, vm)
@@ -407,11 +417,14 @@ fun BrowserScreen(
                                 val decor = ctx.findActivity()?.window?.decorView as? FrameLayout ?: return
                                 decor.addView(view, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
                                 customView = view
+                                // A page's full-screen video keeps playing in picture-in-picture when the user leaves the app.
+                                if (!silent && koinPlayer.prefs.autoPip) { PipState.ratio.value = 16f / 9f; PipState.wanted.value = true }
                             }
                             override fun onHideCustomView() {
                                 val decor = ctx.findActivity()?.window?.decorView as? FrameLayout ?: return
                                 customView?.let { decor.removeView(it) }
                                 customView = null
+                                PipState.wanted.value = false
                             }
                         }
                         // The invisible page behind the share sheet never offers files (an ad could trigger one).
@@ -432,7 +445,9 @@ fun BrowserScreen(
                 ) {
                     val d = ui.pageMedia?.durationSec ?: ui.mainVideo?.duration?.takeIf { it > 0 }
                     Column(Modifier.weight(1f)) {
-                        Text("Video found on this page", style = MaterialTheme.typography.labelLarge)
+                        val instagramPost = ui.mainVideo == null && ui.pageMedia == null &&
+                            com.edureminder.quicktube.core.extractor.InstagramReader.shortcode(ui.url) != null
+                        Text(if (instagramPost) "Download this post" else "Video found on this page", style = MaterialTheme.typography.labelLarge)
                         Text(
                             listOfNotNull(d?.let { Format.duration(it.toLong()) }, Urls.host(ui.url)).joinToString(" · "),
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
@@ -445,8 +460,11 @@ fun BrowserScreen(
         }
     }
 
+    // Leaving the browser or the app keeps the sessions too.
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_STOP) { CookieManager.getInstance().flush() }
     DisposableEffect(Unit) {
         onDispose {
+            CookieManager.getInstance().flush()
             fetcher.webView = null
             vm.pageFetch = null
             webView?.run { stopLoading(); destroy() }

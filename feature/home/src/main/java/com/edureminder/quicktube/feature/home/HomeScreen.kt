@@ -100,6 +100,8 @@ class HomeActions(
     val openSites: () -> Unit,
     val openLibrary: () -> Unit = {},
     val openVault: () -> Unit = {},
+    /** All our games (See all on the games row). */
+    val openGames: () -> Unit = {},
 )
 
 private val tabs = listOf("Search", "YouTube", "Music", "More")
@@ -113,8 +115,8 @@ fun HomeScreen(actions: HomeActions, modifier: Modifier = Modifier) {
 
     LaunchedEffect(pager.currentPage) {
         when (pager.currentPage) {
-            // The Search page shows previews of both, so it warms them up too.
-            0 -> { vm.ensureFeed(); vm.ensureMusic() }
+            // The Search page warms the YouTube tab only when it shows the trending row (Settings → Trending on home).
+            0 -> { if (vm.showTrending.value) vm.ensureFeed() }
             1 -> vm.ensureFeed()
             2 -> vm.ensureMusic()
         }
@@ -182,9 +184,13 @@ private fun DiscoverTab(
 ) {
     val context = LocalContext.current
     val ex = LocalQtExtras.current
+    val sheet = koinInject<DownloadSheetController>()
     val feed by vm.feed.collectAsStateWithLifecycle()
     val music by vm.music.collectAsStateWithLifecycle()
     val recent by vm.recent.collectAsStateWithLifecycle()
+    val games by vm.games.collectAsStateWithLifecycle()
+    val showTrending by vm.showTrending.collectAsStateWithLifecycle()
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { vm.refreshGames(); onPauseOrDispose { } }
     var clip by remember { mutableStateOf<String?>(null) }
     // Android 10+ only lets an app read the clipboard while its window has focus, which comes after
     // ON_RESUME, so read it whenever focus arrives (coming back from another app included).
@@ -263,25 +269,30 @@ private fun DiscoverTab(
                                 Text(url, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = .75f))
                             }
-                            Icon(QtIcons.Download, null, tint = MaterialTheme.colorScheme.primary)
+                            // Its own button: the formats sheet for this link, right here (the card itself opens the page).
+                            Box(
+                                Modifier.size(44.dp).clip(CircleShape).background(ex.brand)
+                                    .pressable(scaleDown = 0.9f, onClick = {
+                                        if (vm.opensInApp(url)) actions.downloadUrl(url) else sheet.open(Urls.normalize(url))
+                                    }),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Icon(QtIcons.Download, "Download", tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(22.dp))
+                            }
                         }
                     }
                     Spacer(Modifier.height(22.dp))
                     QuickSites(actions)
                 }
             }
-            if (feed.items.isNotEmpty() || feed.loading) item(key = "trending") {
+            if (showTrending && (feed.items.isNotEmpty() || feed.loading)) item(key = "trending") {
                 DiscoverHeader("Trending now", QtIcons.TrendingUp, onSeeTrending)
                 TrendingCarousel(feed.items.take(12), loading = feed.items.isEmpty(), onOpen = actions.openItem, onDownload = onDownload)
             }
-            val songs = music.sections.firstOrNull()?.items.orEmpty()
-            if (songs.isNotEmpty()) item(key = "music") {
-                DiscoverHeader(music.sections.first().title, QtIcons.LibraryMusic, onSeeMusic)
-                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    items(songs, key = { it.url }) { item ->
-                        MediaTile(item, onClick = { actions.openItem(item) }, onDownload = { if (item.kind == ItemKind.VIDEO) onDownload(item) else actions.openItem(item) })
-                    }
-                }
+            // Our own games where the music row was (Remote Config; see docs/PROMO_GAMES.md).
+            if (games.games.isNotEmpty()) item(key = "games") {
+                DiscoverHeader(games.title, QtIcons.Apps, actions.openGames)
+                GamesRow(games.games)
             }
             if (recent.isNotEmpty()) item(key = "recent") {
                 DiscoverHeader("Your recent downloads", QtIcons.DownloadDone, actions.openLibrary)

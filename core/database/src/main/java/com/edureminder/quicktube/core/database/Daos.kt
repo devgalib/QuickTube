@@ -150,3 +150,40 @@ interface DeletedHistoryDao {
     @Query("DELETE FROM deleted_history")
     suspend fun clear()
 }
+
+@Dao
+interface PlayHistoryDao {
+    @Query("SELECT * FROM play_history ORDER BY openedAt DESC")
+    fun observe(): Flow<List<PlayHistoryEntity>>
+
+    @Query("SELECT * FROM play_history ORDER BY openedAt DESC")
+    suspend fun all(): List<PlayHistoryEntity>
+
+    @Query("SELECT * FROM play_history WHERE itemKey = :key")
+    suspend fun get(key: String): PlayHistoryEntity?
+
+    @Upsert
+    suspend fun upsert(entity: PlayHistoryEntity)
+
+    /** Keeps the [keep] most recently opened rows. */
+    @Query("DELETE FROM play_history WHERE itemKey NOT IN (SELECT itemKey FROM play_history ORDER BY openedAt DESC LIMIT :keep)")
+    suspend fun trim(keep: Int)
+
+    @Query("DELETE FROM play_history")
+    suspend fun clear()
+}
+
+@Dao
+interface SavedVideoDao {
+    @Query("SELECT * FROM saved_videos ORDER BY savedAt DESC")
+    fun observe(): Flow<List<SavedVideoEntity>>
+
+    @Query("SELECT COUNT(*) > 0 FROM saved_videos WHERE url = :url")
+    fun isSaved(url: String): Flow<Boolean>
+
+    @Upsert
+    suspend fun upsert(entity: SavedVideoEntity)
+
+    @Query("DELETE FROM saved_videos WHERE url IN (:urls)")
+    suspend fun delete(urls: List<String>)
+}

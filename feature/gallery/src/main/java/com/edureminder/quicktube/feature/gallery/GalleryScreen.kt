@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -269,10 +270,10 @@ private fun AlbumsGrid(
 @Composable
 private fun AlbumTile(album: GalleryAlbum, onOpen: (GalleryAlbum) -> Unit) {
     val cs = MaterialTheme.colorScheme
+    // No clip or ripple on the whole tile: a rounded clip cut off the item count under the cover.
     Column(
         Modifier.padding(top = 12.dp, bottom = 9.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .selectable(false, onClick = { onOpen(album) }),
+            .clickable(interactionSource = null, indication = null, role = androidx.compose.ui.semantics.Role.Button) { onOpen(album) },
     ) {
         Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(10.dp)).background(cs.surfaceContainerHigh)) {
             val cover = album.cover

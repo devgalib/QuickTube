@@ -78,7 +78,11 @@ import java.io.File
 fun LibraryScreen(
     onOpenDownloading: () -> Unit,
     onOpenPlayer: () -> Unit,
+    /** Opens a downloaded file (by MediaStore id) in the app's main player. */
+    onOpenMedia: (Long) -> Unit,
     onOpenSource: (String) -> Unit,
+    /** Saved / Watch later list. */
+    onOpenSaved: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val vm = koinViewModel<LibraryViewModel>()
@@ -100,6 +104,9 @@ fun LibraryScreen(
     val mediaLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions(),
     ) { scan() }
+
+    // Files deleted by another app while QuickTube was away drop out of the list.
+    androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { vm.recheckFiles(); onPauseOrDispose { } }
 
     BackHandler(selection != null || searching) { selection = null; searching = false; vm.query.value = "" }
 
@@ -139,6 +146,7 @@ fun LibraryScreen(
                 }
                 else -> Row(Modifier.fillMaxWidth().height(64.dp).padding(start = 22.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Library", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+                    QtIconButton(QtIcons.BookmarkBorder, "Watch later", onOpenSaved)
                     QtIconButton(QtIcons.Search, "Search", { searching = true })
                     QtIconButton(QtIcons.Checklist, "Select", { selection = emptySet() })
                 }
@@ -181,7 +189,7 @@ fun LibraryScreen(
             }
             if (ui.done.isNotEmpty()) item {
                 Text(
-                    "${ui.done.size} files · ${Format.bytes(ui.done.sumOf { it.totalBytes.coerceAtLeast(0) })}",
+                    "${ui.done.size} file${if (ui.done.size == 1) "" else "s"} · ${Format.bytes(ui.done.sumOf { it.totalBytes.coerceAtLeast(0) })}",
                     style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 22.dp, top = 6.dp, bottom = 4.dp),
                 )
@@ -189,10 +197,11 @@ fun LibraryScreen(
             items(ui.done, key = { it.id }) { task ->
                 Box(Modifier.animateItem()) { DoneRow(
                     task,
+                    watched = ui.watched[task.filePath],
                     selected = sel?.contains(task.id),
                     onClick = {
                         if (sel != null) selection = if (task.id in sel) sel - task.id else sel + task.id
-                        else if (task.type == ContentType.VIDEO || task.type == ContentType.AUDIO) { vm.play(task); onOpenPlayer() }
+                        else if (task.type == ContentType.VIDEO || task.type == ContentType.AUDIO) vm.open(task, onOpenMedia, onOpenPlayer)
                         else FileActions.openWith(context, task)
                     },
                     onLongClick = { if (sel == null) selection = setOf(task.id) },
@@ -321,7 +330,7 @@ fun FileThumb(task: DownloadTask, modifier: Modifier) {
 }
 
 @Composable
-private fun DoneRow(task: DownloadTask, selected: Boolean?, onClick: () -> Unit, onLongClick: () -> Unit, onMore: () -> Unit) {
+private fun DoneRow(task: DownloadTask, watched: Float?, selected: Boolean?, onClick: () -> Unit, onLongClick: () -> Unit, onMore: () -> Unit) {
     Row(
         Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(start = 16.dp, end = 6.dp, top = 8.dp, bottom = 8.dp),
@@ -343,8 +352,9 @@ private fun DoneRow(task: DownloadTask, selected: Boolean?, onClick: () -> Unit,
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            if (task.lastPlayedPositionMs > 0 && task.durationSec > 0) GradientProgress(
-                (task.lastPlayedPositionMs / 1000f / task.durationSec).coerceIn(0f, 1f),
+            val progress = watched ?: if (task.lastPlayedPositionMs > 0 && task.durationSec > 0) task.lastPlayedPositionMs / 1000f / task.durationSec else null
+            if (progress != null && progress > 0f) GradientProgress(
+                progress.coerceIn(0f, 1f),
                 Modifier.padding(top = 8.dp).fillMaxWidth(0.6f).height(3.dp),
             )
         }

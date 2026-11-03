@@ -57,11 +57,22 @@ import com.edureminder.quicktube.core.model.Comment
 import com.edureminder.quicktube.core.model.MediaItem
 import com.edureminder.quicktube.core.model.VideoDetails
 import com.edureminder.quicktube.core.playerui.FullscreenEffect
+import com.edureminder.quicktube.core.playerui.PlayerOption
+import com.edureminder.quicktube.core.playerui.QualityMenu
+import com.edureminder.quicktube.core.playerui.UpNext
+import kotlinx.coroutines.launch
+import com.edureminder.quicktube.core.playerui.AutoPipEffect
+import com.edureminder.quicktube.core.playerui.LocalPipMode
+import com.edureminder.quicktube.core.playerui.enterVideoPip
 import com.edureminder.quicktube.core.playerui.VideoPlayerBox
 import com.edureminder.quicktube.core.ui.Avatar
 import com.edureminder.quicktube.core.ui.ErrorBox
 import com.edureminder.quicktube.core.ui.FooterLoading
 import com.edureminder.quicktube.core.ui.LoadingBox
+import com.edureminder.quicktube.core.designsystem.shimmer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import com.edureminder.quicktube.core.ui.MediaRow
 import com.edureminder.quicktube.core.ui.OnNearEnd
 import org.koin.compose.koinInject
@@ -70,9 +81,14 @@ import org.koin.compose.viewmodel.koinViewModel
 @Composable
 fun VideoScreen(
     url: String,
+    /** The tapped card's title and thumbnail, shown while the page loads. */
+    previewTitle: String? = null,
+    previewThumbnail: String? = null,
     onBack: () -> Unit,
     onOpen: (MediaItem) -> Unit,
     onChannel: (String) -> Unit,
+    /** Plays another video in place of this one (Next, autoplay). */
+    onPlayNext: (MediaItem) -> Unit = onOpen,
 ) {
     val vm = koinViewModel<VideoViewModel>(key = url)
     LaunchedEffect(url) { vm.load(url) }
@@ -84,12 +100,50 @@ fun VideoScreen(
     var showComments by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
-    FullscreenEffect(fullscreen)
+    FullscreenEffect(fullscreen && !LocalPipMode.current)
     BackHandler(fullscreen) { fullscreen = false }
+    val saved by vm.savedFlow.collectAsStateWithLifecycle()
+    val activity = androidx.activity.compose.LocalActivity.current
+    if (details is LoadState.Success) AutoPipEffect(vm.player, playback)
+    // Back closes the video; only the picture-in-picture button sends it to the floating window.
+    fun leave(toPip: Boolean = false) {
+        if (toPip) { activity?.enterVideoPip(playback); return }
+        onBack()
+    }
+    BackHandler(!fullscreen) { leave() }
+    if (LocalPipMode.current) {
+        // The whole app is the picture-in-picture window: only the video.
+        VideoPlayerBox(vm.player, playback, Modifier.fillMaxSize(), fullscreen = true, showPrevNext = false, overlayControls = false)
+        return
+    }
+    // Rows this page adds to the player's options sheet.
+    val settingsRepo = koinInject<com.edureminder.quicktube.core.data.SettingsRepository>()
+    val appSettings by settingsRepo.settings.collectAsStateWithLifecycle(com.edureminder.quicktube.core.model.AppSettings())
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val currentQuality by vm.quality.collectAsStateWithLifecycle()
+    val related = (details as? LoadState.Success)?.data?.related.orEmpty().firstOrNull { it.kind == com.edureminder.quicktube.core.model.ItemKind.VIDEO && !it.isLive }
+    // YouTube's player extras: Quality, the autoplay switch, Next = the first suggestion (with "Up next" at the end).
+    val qualityMenu = vm.qualities().takeIf { it.isNotEmpty() }?.let { q ->
+        QualityMenu(if (currentQuality == "Auto") vm.autoLabel() else currentQuality, q) { vm.setQuality(it) }
+    }
+    val nextVideo: (() -> Unit)? = related?.let { r -> { onPlayNext(r) } }
+    val upNext = related?.let { r -> UpNext(r.title, r.thumbnail) { onPlayNext(r) } }
+    val onAutoplay: (Boolean) -> Unit = { v -> scope.launch { settingsRepo.update { it.copy(autoplayNext = v) } } }
+    val playerOptions = listOf(
+        PlayerOption(if (saved) QtIcons.Bookmark else QtIcons.BookmarkBorder, if (saved) "Saved to Watch later" else "Watch later", saved) {
+            vm.toggleSaved()
+            Toast.makeText(context, if (saved) "Removed from Watch later" else "Saved to Watch later", Toast.LENGTH_SHORT).show()
+        },
+        PlayerOption(QtIcons.Headphones, "Play in background") {
+            vm.playInBackground()
+            Toast.makeText(context, "Playing audio in background", Toast.LENGTH_SHORT).show()
+        },
+    )
 
     if (fullscreen) {
         VideoPlayerBox(vm.player, playback, Modifier.fillMaxSize(), fullscreen = true, onToggleFullscreen = { fullscreen = false },
-            showPrevNext = false, onRetry = vm::retry)
+            showPrevNext = false, onRetry = vm::retry, options = playerOptions, onPip = { leave(toPip = true) },
+            quality = qualityMenu, autoplay = appSettings.autoplayNext, onAutoplayChange = onAutoplay, onNext = nextVideo, upNext = upNext)
         return
     }
 
@@ -97,14 +151,15 @@ fun VideoScreen(
         Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) {
             if (details is LoadState.Success) {
                 VideoPlayerBox(vm.player, playback, Modifier.fillMaxSize(), onToggleFullscreen = { fullscreen = true },
-                    onCollapse = onBack, showPrevNext = false, onRetry = vm::retry)
-            } else if (details is LoadState.Loading) LoadingBox()
-            IconButton(onClick = onBack, modifier = Modifier.align(Alignment.TopStart)) {
+                    onCollapse = { leave() }, showPrevNext = false, onRetry = vm::retry, options = playerOptions, onPip = { leave(toPip = true) },
+                    quality = qualityMenu, autoplay = appSettings.autoplayNext, onAutoplayChange = onAutoplay, onNext = nextVideo, upNext = upNext)
+            } else if (details is LoadState.Loading) PlayerLoading(previewThumbnail)
+            IconButton(onClick = { leave() }, modifier = Modifier.align(Alignment.TopStart)) {
                 if (details !is LoadState.Success) Icon(QtIcons.ArrowBack, "Back", tint = Color.White)
             }
         }
         when (val d = details) {
-            is LoadState.Loading -> LoadingBox(Modifier.fillMaxWidth().weight(1f))
+            is LoadState.Loading -> VideoPageSkeleton(previewTitle, Modifier.fillMaxWidth().weight(1f))
             is LoadState.Error -> ErrorBox(d.message, vm::retry, Modifier.fillMaxWidth().weight(1f))
             is LoadState.Success -> {
                 val v = d.data
@@ -129,10 +184,15 @@ fun VideoScreen(
                                 "Download", { sheet.open(v.item.url, v.item) }, Modifier.weight(1f), icon = QtIcons.Download,
                                 enabled = !v.item.isLive,
                             )
+                            QtIconButton(if (saved) QtIcons.Bookmark else QtIcons.BookmarkBorder, "Watch later", {
+                                vm.toggleSaved()
+                                Toast.makeText(context, if (saved) "Removed from Watch later" else "Saved to Watch later", Toast.LENGTH_SHORT).show()
+                            }, container = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.padding(start = 12.dp),
+                                tint = if (saved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
                             QtIconButton(QtIcons.Headphones, "Play in background", {
                                 vm.playInBackground()
                                 Toast.makeText(context, "Playing audio in background", Toast.LENGTH_SHORT).show()
-                            }, container = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.padding(start = 12.dp))
+                            }, container = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.padding(start = 8.dp))
                             QtIconButton(QtIcons.MoreVert, "More", { showAbout = true }, container = MaterialTheme.colorScheme.surfaceContainerHigh,
                                 modifier = Modifier.padding(start = 8.dp))
                         }
@@ -234,6 +294,57 @@ private fun CommentRow(c: Comment) {
                 Icon(QtIcons.ThumbUp, null, Modifier.padding(end = 4.dp).heightIn(max = 14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(if (c.likeCount > 0) Format.count(c.likeCount.toLong()) else "", style = MaterialTheme.typography.labelSmall)
                 if (c.replyCount > 0) Text("   ${c.replyCount} replies", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            }
+        }
+    }
+}
+
+/** The player area while the page loads: the video's thumbnail (when known) under the loading ring. */
+@Composable
+private fun PlayerLoading(thumbnail: String?) {
+    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+        if (thumbnail != null) coil3.compose.AsyncImage(
+            thumbnail, null, contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+            modifier = Modifier.fillMaxSize(), alpha = 0.55f,
+        )
+        com.edureminder.quicktube.core.playerui.PlayerSpinner()
+    }
+}
+
+/**
+ * The page's shape while it loads: title (the real one when the tapped card had it), channel, the action buttons,
+ * comments and the "Up next" list, all as soft shimmering blocks.
+ */
+@Composable
+private fun VideoPageSkeleton(title: String?, modifier: Modifier) {
+    val bone = MaterialTheme.colorScheme.surfaceContainerHigh
+    fun Modifier.bone(shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(8.dp)) = clip(shape).background(bone).shimmer()
+    Column(modifier.verticalScroll(rememberScrollState(), enabled = false)) {
+        Row(Modifier.padding(start = 16.dp, top = 12.dp, end = 16.dp), verticalAlignment = Alignment.Top) {
+            Box(Modifier.size(36.dp).bone(androidx.compose.foundation.shape.CircleShape))
+            Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                if (title != null) Text(title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                else {
+                    Box(Modifier.fillMaxWidth().height(18.dp).bone())
+                    Box(Modifier.padding(top = 8.dp).fillMaxWidth(0.7f).height(18.dp).bone())
+                }
+                Box(Modifier.padding(top = 10.dp).fillMaxWidth(0.55f).height(12.dp).bone())
+            }
+        }
+        Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f).height(48.dp).bone(RoundedCornerShape(50)))
+            repeat(3) { Box(Modifier.padding(start = 10.dp).size(44.dp).bone(androidx.compose.foundation.shape.CircleShape)) }
+        }
+        Box(Modifier.padding(horizontal = 16.dp).fillMaxWidth().height(76.dp).bone(RoundedCornerShape(14.dp)))
+        Box(Modifier.padding(start = 16.dp, top = 20.dp, bottom = 12.dp).width(80.dp).height(16.dp).bone())
+        repeat(5) {
+            Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.width(160.dp).aspectRatio(16f / 9f).bone(RoundedCornerShape(12.dp)))
+                Column(Modifier.weight(1f).padding(start = 12.dp)) {
+                    Box(Modifier.fillMaxWidth().height(14.dp).bone())
+                    Box(Modifier.padding(top = 6.dp).fillMaxWidth(0.8f).height(14.dp).bone())
+                    Box(Modifier.padding(top = 10.dp).fillMaxWidth(0.5f).height(11.dp).bone())
+                }
             }
         }
     }

@@ -31,6 +31,8 @@ data class SheetUi(
     val isLive: Boolean = false,
     /** Diagnostics shown under "Technical details" when nothing could be found. */
     val report: List<String> = emptyList(),
+    /** [options] are a post's photos and videos (each one downloadable), not formats of one video. */
+    val items: Boolean = false,
 )
 
 class DownloadSheetViewModel(
@@ -88,7 +90,7 @@ class DownloadSheetViewModel(
         when (target) {
             is SheetTarget.Direct -> _ui.value = SheetUi(
                 loading = false, title = target.title, thumbnail = target.thumbnail,
-                pageUrl = target.pageUrl, options = target.options, headers = target.headers,
+                pageUrl = target.pageUrl, options = target.options, headers = target.headers, items = target.items,
             )
             is SheetTarget.Sniffed -> {
                 _ui.value = SheetUi(loading = true, title = target.title, thumbnail = target.thumbnail, pageUrl = target.pageUrl,
@@ -118,7 +120,10 @@ class DownloadSheetViewModel(
                     )
                 }
             }
-            is SheetTarget.Page -> {
+            is SheetTarget.Page -> if (target.browserFirst) {
+                // Nothing to look up here: the sheet's host opens the page in its browser at once (see DownloadSheetHost).
+                _ui.value = SheetUi(loading = false, pageUrl = target.url, error = "Couldn't read this post. Open it in the QuickTube browser.")
+            } else {
                 _ui.value = SheetUi(loading = true, title = target.preview?.title.orEmpty(), thumbnail = target.preview?.thumbnail, pageUrl = target.url)
                 job = viewModelScope.launch {
                     _ui.value = try {
@@ -186,6 +191,16 @@ class DownloadSheetViewModel(
     suspend fun existing(option: DownloadOption): com.edureminder.quicktube.core.model.DownloadTask? {
         val s = _ui.value
         return runCatching { downloads.findExisting(option.toRequest(s.title, s.pageUrl, s.thumbnail, s.durationSec, s.headers)) }.getOrNull()
+    }
+
+    /** A post's chosen photos and videos, each its own download (numbered when there are several). */
+    fun downloadItems(chosen: List<DownloadOption>) {
+        val s = _ui.value
+        chosen.forEachIndexed { i, o ->
+            val title = if (chosen.size > 1) "${s.title} (${s.options.indexOf(o) + 1})" else s.title
+            analytics.event(com.edureminder.quicktube.core.analytics.Events.DOWNLOAD_STARTED, mapOf("kind" to o.kind.name.lowercase(), "protocol" to "http", "audio_only" to false))
+            downloads.submit(o.toRequest(title, s.pageUrl, o.thumbnail ?: s.thumbnail, s.durationSec, s.headers))
+        }
     }
 
     fun download(option: DownloadOption) {

@@ -107,3 +107,29 @@ data class DeletedHistoryEntity(
 
 fun DeletedHistoryEntity.asModel() =
     com.edureminder.quicktube.core.model.DeletedDownload(id, title, pageUrl, url, thumbnail, mimeType, quality, sizeBytes, durationSec, deletedAt)
+
+/** Where a played video was left ([itemKey]: file path or page URL). Capped; the least recently opened rows go first. */
+@Entity(tableName = "play_history", indices = [Index("openedAt")])
+data class PlayHistoryEntity(
+    @PrimaryKey val itemKey: String,
+    val title: String,
+    val positionMs: Long,
+    val durationMs: Long,
+    val openedAt: Long,
+)
+
+fun PlayHistoryEntity.asModel() = com.edureminder.quicktube.core.model.PlayHistoryEntry(itemKey, title, positionMs, durationMs, openedAt)
+
+/** Videos saved with "Watch later", by page URL. */
+@Entity(tableName = "saved_videos", indices = [Index("savedAt")])
+data class SavedVideoEntity(
+    @PrimaryKey val url: String,
+    val title: String,
+    val thumbnail: String?,
+    val uploader: String,
+    val durationSec: Long,
+    val savedAt: Long,
+)
+
+fun SavedVideoEntity.asModel() = com.edureminder.quicktube.core.model.SavedVideo(url, title, thumbnail, uploader, durationSec, savedAt)
+fun com.edureminder.quicktube.core.model.SavedVideo.asEntity() = SavedVideoEntity(url, title, thumbnail, uploader, durationSec, savedAt)

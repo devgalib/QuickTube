@@ -9,6 +9,7 @@ import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -65,6 +66,10 @@ fun Modifier.shimmer(): Modifier = composed {
     val base = MaterialTheme.colorScheme.surfaceContainerHigh
     val highlight = MaterialTheme.colorScheme.surfaceContainerHighest
     val t = rememberInfiniteTransition(label = "shimmer")
-    val x by t.animateFloat(-600f, 1600f, infiniteRepeatable(tween(1300, easing = LinearEasing)), label = "x")
-    background(Brush.linearGradient(listOf(base, highlight, base), start = Offset(x, 0f), end = Offset(x + 500f, 260f)))
+    val x = t.animateFloat(-600f, 1600f, infiniteRepeatable(tween(1300, easing = LinearEasing)), label = "x")
+    // Read in the draw phase only: a page of skeletons repaints each frame instead of recomposing.
+    drawBehind {
+        val p = x.value
+        drawRect(Brush.linearGradient(listOf(base, highlight, base), start = Offset(p, 0f), end = Offset(p + 500f, 260f)))
+    }
 }

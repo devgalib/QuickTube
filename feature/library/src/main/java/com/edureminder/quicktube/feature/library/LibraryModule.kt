@@ -4,5 +4,5 @@ import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 
 val libraryModule = module {
-    viewModel { LibraryViewModel(get(), get(), get(), get()) }
+    viewModel { LibraryViewModel(get(), get(), get(), get(), get(), get()) }
 }

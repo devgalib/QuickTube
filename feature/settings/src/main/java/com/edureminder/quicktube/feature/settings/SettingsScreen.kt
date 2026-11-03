@@ -37,6 +37,7 @@ import org.koin.compose.viewmodel.koinViewModel
 
 class SettingsActions(
     val downloadSettings: () -> Unit,
+    val playerSettings: () -> Unit,
     val notificationSettings: () -> Unit,
     val theme: () -> Unit,
     val recycleBin: () -> Unit,
@@ -82,6 +83,8 @@ fun SettingsScreen(actions: SettingsActions) {
             QtCard {
                 NavRow(QtIcons.Download, "Download settings", "Path, speed limit, tasks", tint = Blue, onClick = actions.downloadSettings)
                 RowDivider()
+                NavRow(QtIcons.PlayCircle, "Player", "Resume, history, gestures, picture-in-picture", tint = Green, onClick = actions.playerSettings)
+                RowDivider()
                 NavRow(QtIcons.Notifications, "Notification settings", tint = Orange, onClick = actions.notificationSettings)
                 RowDivider()
                 NavRow(QtIcons.Palette, "Appearance", trailing = when (s.themeMode) {
@@ -89,6 +92,10 @@ fun SettingsScreen(actions: SettingsActions) {
                 }, tint = Purple, onClick = actions.theme)
                 RowDivider()
                 NavRow(QtIcons.Public, "Content region", trailing = s.contentRegion.ifBlank { "Auto" }, tint = Teal, onClick = actions.region)
+                RowDivider()
+                SwitchRow("Trending on home", "Show trending videos on the Download tab", s.showTrending, QtIcons.TrendingUp) { v ->
+                    vm.update { it.copy(showTrending = v) }
+                }
             }
         }
         item { GroupLabel("Download tools") }
@@ -96,7 +103,7 @@ fun SettingsScreen(actions: SettingsActions) {
             QtCard {
                 NavRow(QtIcons.RestoreFromTrash, "Recover deleted files", trailing = if (trash > 0) "$trash" else null, tint = Green, onClick = actions.recycleBin)
                 RowDivider()
-                NavRow(QtIcons.History, "Deleted download history", "Download again anything you removed", tint = Blue, onClick = actions.deletedHistory)
+                NavRow(QtIcons.History, "Deleted downloads", "Download again anything no longer on this phone", tint = Blue, onClick = actions.deletedHistory)
                 RowDivider()
                 NavRow(BrandIcons.WhatsApp, "WhatsApp status saver", tint = Color(0xFF25D366), onClick = actions.statusSaver)
                 RowDivider()

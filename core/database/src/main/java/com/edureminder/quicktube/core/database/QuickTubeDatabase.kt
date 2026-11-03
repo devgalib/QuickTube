@@ -11,9 +11,9 @@ import org.koin.dsl.module
 @Database(
     entities = [
         DownloadEntity::class, SiteEntity::class, HistoryEntity::class, BookmarkEntity::class, SearchQueryEntity::class,
-        DeletedHistoryEntity::class,
+        DeletedHistoryEntity::class, PlayHistoryEntity::class, SavedVideoEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class QuickTubeDatabase : RoomDatabase() {
@@ -23,6 +23,8 @@ abstract class QuickTubeDatabase : RoomDatabase() {
     abstract fun bookmarkDao(): BookmarkDao
     abstract fun searchHistoryDao(): SearchHistoryDao
     abstract fun deletedHistoryDao(): DeletedHistoryDao
+    abstract fun playHistoryDao(): PlayHistoryDao
+    abstract fun savedVideoDao(): SavedVideoDao
 }
 
 /** v2: downloads can be HLS playlists. */
@@ -51,10 +53,26 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
+/** v5: playback history (resume) and "Watch later". */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `play_history` (`itemKey` TEXT NOT NULL, `title` TEXT NOT NULL, `positionMs` INTEGER NOT NULL, " +
+                "`durationMs` INTEGER NOT NULL, `openedAt` INTEGER NOT NULL, PRIMARY KEY(`itemKey`))",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_play_history_openedAt` ON `play_history` (`openedAt`)")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `saved_videos` (`url` TEXT NOT NULL, `title` TEXT NOT NULL, `thumbnail` TEXT, `uploader` TEXT NOT NULL, " +
+                "`durationSec` INTEGER NOT NULL, `savedAt` INTEGER NOT NULL, PRIMARY KEY(`url`))",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_saved_videos_savedAt` ON `saved_videos` (`savedAt`)")
+    }
+}
+
 val databaseModule = module {
     single {
         Room.databaseBuilder(androidContext(), QuickTubeDatabase::class.java, "quicktube.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
             .fallbackToDestructiveMigrationOnDowngrade(true)
             .build()
     }
@@ -64,4 +82,6 @@ val databaseModule = module {
     single { get<QuickTubeDatabase>().bookmarkDao() }
     single { get<QuickTubeDatabase>().searchHistoryDao() }
     single { get<QuickTubeDatabase>().deletedHistoryDao() }
+    single { get<QuickTubeDatabase>().playHistoryDao() }
+    single { get<QuickTubeDatabase>().savedVideoDao() }
 }

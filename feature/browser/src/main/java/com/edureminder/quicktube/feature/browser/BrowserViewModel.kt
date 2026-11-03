@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.edureminder.quicktube.core.data.BrowserRepository
 import com.edureminder.quicktube.core.downloadsheet.DownloadSheetController
 import com.edureminder.quicktube.core.downloadsheet.SheetTarget
+import com.edureminder.quicktube.core.extractor.InstagramReader
 import com.edureminder.quicktube.core.extractor.PageMedia
 import com.edureminder.quicktube.core.extractor.PageMediaParser
 import com.edureminder.quicktube.core.extractor.StreamCandidate
@@ -103,6 +104,43 @@ class BrowserViewModel(
     fun onPageFinished(url: String, title: String?) {
         _ui.update { it.copy(title = title.orEmpty()) }
         if (recordHistory) viewModelScope.launch { repo.recordVisit(title.orEmpty(), url) }
+        // Shared or pasted Instagram post: its photos and videos come from the post itself, no need to wait for playback.
+        if (autoDownload && !autoDone && InstagramReader.shortcode(url) != null) viewModelScope.launch {
+            if (!autoDone && openInstagram(url)) autoDone = true
+            else instagramFailed = url
+            maybeAutoDownload()
+        }
+    }
+
+    /** The Instagram post whose embed couldn't be read: the usual video detection takes over for it. */
+    private var instagramFailed: String? = null
+
+    /**
+     * Instagram post, reel or IGTV: reads the post's embed page through the open page (the user's own session) and
+     * offers every item: the video, or each photo and video of a carousel. False when it couldn't be read.
+     */
+    private suspend fun openInstagram(url: String): Boolean {
+        val code = InstagramReader.shortcode(url) ?: return false
+        val fetch = pageFetch ?: return false
+        val post = fetch(InstagramReader.embedUrl(code))?.let { html ->
+            withContext(Dispatchers.Default) { InstagramReader.parseEmbed(html) }
+        } ?: return false
+        val single = post.items.size == 1
+        val options = post.items.mapIndexed { i, item ->
+            val n = if (single) "" else " ${i + 1}"
+            val size = if (item.width > 0 && item.height > 0) "${item.width} × ${item.height}" else ""
+            if (item.isVideo) DownloadOption(
+                "ig$i", FormatKind.VIDEO, "Video$n", size.ifBlank { "Video" }, "mp4", "video/mp4", item.url,
+                height = minOf(item.width, item.height).takeIf { it > 0 } ?: 0, thumbnail = item.thumbnail,
+            ) else DownloadOption("ig$i", FormatKind.IMAGE, "Photo$n", size.ifBlank { "Photo" }, "jpg", "image/jpeg", item.url, thumbnail = item.thumbnail)
+        }
+        sheet.openDirect(
+            SheetTarget.Direct(
+                title = post.title, pageUrl = url, thumbnail = post.thumbnail, options = options,
+                headers = sessionHeaders(post.items.first().url), items = true,
+            ),
+        )
+        return true
     }
 
     fun onProgress(p: Int, canGoBack: Boolean) = _ui.update { it.copy(progress = p, canGoBack = canGoBack) }
@@ -169,6 +207,8 @@ class BrowserViewModel(
     private fun maybeAutoDownload() {
         if (!autoDownload || autoDone) return
         val s = _ui.value
+        // An Instagram post is read from the post itself (onPageFinished); the video detection is its fallback.
+        if (InstagramReader.shortcode(s.url) != null && instagramFailed != s.url) return
         if (s.pageMedia == null && s.mainVideo == null) return
         autoDone = true
         download(isNativePage = false)
@@ -178,6 +218,15 @@ class BrowserViewModel(
 
     /** Download button: native extraction for supported pages, otherwise the video that is playing. */
     fun download(isNativePage: Boolean) {
+        val s = _ui.value
+        if (InstagramReader.shortcode(s.url) != null && pageFetch != null) {
+            viewModelScope.launch { if (!openInstagram(s.url)) downloadPlaying(isNativePage) }
+            return
+        }
+        downloadPlaying(isNativePage)
+    }
+
+    private fun downloadPlaying(isNativePage: Boolean) {
         val s = _ui.value
         val main = s.mainVideo
         val declared = s.pageMedia

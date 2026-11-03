@@ -1,6 +1,8 @@
 package com.edureminder.quicktube.core.data
 
 import android.content.ContentResolver
+import android.content.ContentUris
+import android.media.MediaScannerConnection
 import android.content.Context
 import android.database.ContentObserver
 import android.database.Cursor
@@ -22,6 +24,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 import java.io.File
 
 /**
@@ -29,7 +35,8 @@ import java.io.File
  * grid shows something at once, later pages are bigger. Only light columns are read; thumbnails come from MediaStore.
  */
 internal class MediaStoreGalleryRepository(context: Context) : GalleryRepository {
-    private val resolver = context.applicationContext.contentResolver
+    private val appContext = context.applicationContext
+    private val resolver = appContext.contentResolver
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val state = MutableStateFlow<GalleryLibrary?>(null)
     override val library: StateFlow<GalleryLibrary?> = state.asStateFlow()
@@ -152,6 +159,25 @@ internal class MediaStoreGalleryRepository(context: Context) : GalleryRepository
             resolver.query(uri, PROJECTION, SELECTION, null, "$sort LIMIT $limit OFFSET $offset")
         }
     }
+
+    override suspend fun mediaIdFor(path: String): Long? = withContext(Dispatchers.IO) {
+        if (!File(path).exists()) return@withContext null
+        idByPath(path) ?: run {
+            val scanned = withTimeoutOrNull(8_000) {
+                suspendCancellableCoroutine { cont ->
+                    MediaScannerConnection.scanFile(appContext, arrayOf(path), null) { _, uri -> if (cont.isActive) cont.resume(uri) }
+                }
+            }
+            scanned?.let { runCatching { ContentUris.parseId(it) }.getOrNull() } ?: idByPath(path)
+        }
+    }
+
+    private fun idByPath(path: String): Long? = runCatching {
+        resolver.query(
+            MediaStore.Files.getContentUri("external"), arrayOf(MediaStore.MediaColumns._ID),
+            "${MediaStore.MediaColumns.DATA} = ?", arrayOf(path), null,
+        )?.use { c -> if (c.moveToFirst()) c.getLong(0) else null }
+    }.getOrNull()
 
     private fun Cursor.getStringOrNull(i: Int): String? = if (isNull(i)) null else getString(i)
 

@@ -1,0 +1,37 @@
+{
+  "parameterGroups": {
+    "Promo games": {
+      "description": "Our own games on QuickTube's home screen. Format: docs/PROMO_GAMES.md",
+      "parameters": {
+        "qt_games": {
+          "defaultValue": {
+            "value": "{\n  \"games\": [\n    {\n      \"id\": \"arrow\",\n      \"name\": \"Arrow Puzzle: Puzzle Escape\",\n      \"package\": \"com.edureminder.arrow\",\n      \"icon\": \"https://play-lh.googleusercontent.com/92-fPbbSm080ASr0slQYAkRzoZJe49BHbKsWGAWW-HaWOEK433FVlZjXNywcfg_xuUnMBZQVWsdu6VG2xlKs=s256-rw\",\n      \"banner\": \"https://play-lh.googleusercontent.com/wuVcRpj6ZwqsUQ-KARBPLQJ4I25kYYZua2-cYE4E1n2c7vCmNS1CPrXJUpHhnyf2FTkjKK2UJEvV51aW2QuJmZQ=w1052-h592-rw\",\n      \"tagline\": \"Tap arrows to clear the maze!\",\n      \"genre\": \"Puzzle\",\n      \"url\": \"https://play.google.com/store/apps/details?id=com.edureminder.arrow\",\n      \"enabled\": true\n    },\n    {\n      \"id\": \"arrow-2\",\n      \"name\": \"Arrow Puzzle: Puzzle Escape\",\n      \"package\": \"com.edureminder.arrow\",\n      \"icon\": \"https://play-lh.googleusercontent.com/92-fPbbSm080ASr0slQYAkRzoZJe49BHbKsWGAWW-HaWOEK433FVlZjXNywcfg_xuUnMBZQVWsdu6VG2xlKs=s256-rw\",\n      \"banner\": \"https://play-lh.googleusercontent.com/_nCN4LUb1OWk9HB1qmCgeDhcT3HzGEiI6ukO7tRtG1DxcVzVFpPnKDE53rcxyaV04HY8txsGlmPCJFd_mEBXgQ=w1052-h592-rw\",\n      \"tagline\": \"Tap arrows to clear the maze!\",\n      \"genre\": \"Puzzle\",\n      \"url\": \"https://play.google.com/store/apps/details?id=com.edureminder.arrow\",\n      \"enabled\": true\n    },\n    {\n      \"id\": \"arrow-3\",\n      \"name\": \"Arrow Puzzle: Puzzle Escape\",\n      \"package\": \"com.edureminder.arrow\",\n      \"icon\": \"https://play-lh.googleusercontent.com/92-fPbbSm080ASr0slQYAkRzoZJe49BHbKsWGAWW-HaWOEK433FVlZjXNywcfg_xuUnMBZQVWsdu6VG2xlKs=s256-rw\",\n      \"banner\": \"https://play-lh.googleusercontent.com/hrJ_NTVpw_GBSOT1zWYPiGXJxknpqd7d270eSaBSJF3ZQekxx1piiGL3-2cjx1zSJkGlNs-umOAjxa6UuuwoQg=w1052-h592-rw\",\n      \"tagline\": \"Tap arrows to clear the maze!\",\n      \"genre\": \"Puzzle\",\n      \"url\": \"https://play.google.com/store/apps/details?id=com.edureminder.arrow\",\n      \"enabled\": true\n    },\n    {\n      \"id\": \"arrow-4\",\n      \"name\": \"Arrow Puzzle: Puzzle Escape\",\n      \"package\": \"com.edureminder.arrow\",\n      \"icon\": \"https://play-lh.googleusercontent.com/92-fPbbSm080ASr0slQYAkRzoZJe49BHbKsWGAWW-HaWOEK433FVlZjXNywcfg_xuUnMBZQVWsdu6VG2xlKs=s256-rw\",\n      \"banner\": \"https://play-lh.googleusercontent.com/VLfdcr3SlqMa8YcS7QuAifcevVXE2hor_d7resQP85QuVyOpdNVj7h_JOQyZi1hT1ET-OOtKYDl_8TcX-mnKqA=w1052-h592-rw\",\n      \"tagline\": \"Tap arrows to clear the maze!\",\n      \"genre\": \"Puzzle\",\n      \"url\": \"https://play.google.com/store/apps/details?id=com.edureminder.arrow\",\n      \"enabled\": true\n    },\n    {\n      \"id\": \"arrow-5\",\n      \"name\": \"Arrow Puzzle: Puzzle Escape\",\n      \"package\": \"com.edureminder.arrow\",\n      \"icon\": \"https://play-lh.googleusercontent.com/92-fPbbSm080ASr0slQYAkRzoZJe49BHbKsWGAWW-HaWOEK433FVlZjXNywcfg_xuUnMBZQVWsdu6VG2xlKs=s256-rw\",\n      \"banner\": \"https://play-lh.googleusercontent.com/btNZDuDeWEtiAVNiMFoM9lRooGdPkrDrJXn9nSpuGqwDyYMGFJwrm_TTjFVCIxabp7-guNDk9TB6nL8GMrSBhQ=w1052-h592-rw\",\n      \"tagline\": \"Tap arrows to clear the maze!\",\n      \"genre\": \"Puzzle\",\n      \"url\": \"https://play.google.com/store/apps/details?id=com.edureminder.arrow\",\n      \"enabled\": true\n    }\n  ]\n}"
+          },
+          "description": "Games list (JSON). Order in the app rotates on every visit.",
+          "valueType": "JSON"
+        },
+        "qt_games_refresh_hours": {
+          "defaultValue": {
+            "value": "24"
+          },
+          "description": "How often the app fetches this list, in hours.",
+          "valueType": "NUMBER"
+        },
+        "qt_games_title": {
+          "defaultValue": {
+            "value": "Our games"
+          },
+          "description": "Title of the home screen row and the See all screen.",
+          "valueType": "STRING"
+        },
+        "qt_games_enabled": {
+          "defaultValue": {
+            "value": "true"
+          },
+          "description": "false hides the games row.",
+          "valueType": "BOOLEAN"
+        }
+      }
+    }
+  }
+}

@@ -47,6 +47,11 @@ interface LibraryRepository {
     val deletedHistory: Flow<List<com.edureminder.quicktube.core.model.DeletedDownload>>
     /** Adds media files found in the download folder that aren't in the library yet (e.g. after reinstalling). Returns how many. */
     suspend fun importFolder(dir: String): Int
+    /**
+     * Moves finished downloads whose file is gone from the device (deleted in another app, a file manager…) into the
+     * deleted history, so they can be downloaded again. Returns how many.
+     */
+    suspend fun archiveMissing(): Int
     suspend fun removeDeletedHistory(ids: List<Long>)
     suspend fun clearDeletedHistory()
 }
@@ -79,10 +84,48 @@ interface SearchHistoryRepository {
     suspend fun clear()
 }
 
+/** Where played videos were left, for resuming. Holds at most [MAX_ENTRIES]; the least recently opened go first. */
+interface PlaybackHistoryRepository {
+    /** Most recently opened first. */
+    val entries: Flow<List<com.edureminder.quicktube.core.model.PlayHistoryEntry>>
+    suspend fun all(): List<com.edureminder.quicktube.core.model.PlayHistoryEntry>
+    /** Remembers [positionMs] for [key]; [opened] also marks it as just opened (for eviction order). */
+    suspend fun save(key: String, title: String, positionMs: Long, durationMs: Long, opened: Boolean = false)
+    suspend fun clear()
+
+    companion object {
+        const val MAX_ENTRIES = 300
+    }
+}
+
+/** "Watch later": online videos saved to open later. */
+interface SavedVideosRepository {
+    val saved: Flow<List<com.edureminder.quicktube.core.model.SavedVideo>>
+    fun isSaved(url: String): Flow<Boolean>
+    suspend fun save(video: com.edureminder.quicktube.core.model.SavedVideo)
+    suspend fun remove(urls: List<String>)
+}
+
+/**
+ * Our games for the home screen. Loaded from the copy saved at the last refresh, so they show at once; refreshed from
+ * Remote Config at most once per refresh interval (24 h, set by `qt_games_refresh_hours`). The order rotates on every
+ * app visit, so each game gets the first place in turn.
+ */
+interface GamesRepository {
+    val games: StateFlow<com.edureminder.quicktube.core.model.PromoGames>
+    /** Fetches from Remote Config when the last refresh is older than the interval; otherwise does nothing. */
+    fun refreshIfDue()
+}
+
 /** Photos and videos on the device (MediaStore). Loaded in pages, kept fresh by a content observer. */
 interface GalleryRepository {
     /** Null until the first page has loaded; afterwards grows page by page until [GalleryLibrary.complete]. */
     val library: StateFlow<GalleryLibrary?>
     /** Starts loading (if not yet) and watching for changes. Call again after permissions change. */
     fun load(force: Boolean = false)
+    /**
+     * MediaStore id of the file at [path], scanning it into MediaStore first when it isn't there yet (a download that
+     * finished moments ago). Null when the file is outside MediaStore's reach (app-private storage) or unreadable.
+     */
+    suspend fun mediaIdFor(path: String): Long?
 }

@@ -13,6 +13,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.Spacer
@@ -63,6 +65,7 @@ import androidx.compose.animation.scaleOut
 import com.edureminder.quicktube.feature.settings.AboutScreen
 import com.edureminder.quicktube.feature.settings.DownloadSettingsScreen
 import com.edureminder.quicktube.feature.settings.NotificationSettingsScreen
+import com.edureminder.quicktube.feature.settings.PlayerSettingsScreen
 import com.edureminder.quicktube.feature.settings.RegionScreen
 import com.edureminder.quicktube.feature.settings.SettingsActions
 import com.edureminder.quicktube.feature.settings.SettingsScreen
@@ -75,6 +78,7 @@ import com.edureminder.quicktube.feature.tools.StatusSaverScreen
 import com.edureminder.quicktube.feature.tools.StorageCleanScreen
 import com.edureminder.quicktube.feature.tools.VaultScreen
 import com.edureminder.quicktube.feature.home.HomeScreen
+import com.edureminder.quicktube.feature.home.GamesScreen
 import com.edureminder.quicktube.feature.home.HowToScreen
 import com.edureminder.quicktube.feature.library.DownloadingScreen
 import com.edureminder.quicktube.feature.library.LibraryScreen
@@ -83,6 +87,7 @@ import com.edureminder.quicktube.feature.player.PlayerScreen
 import com.edureminder.quicktube.feature.search.SearchResultsScreen
 import com.edureminder.quicktube.feature.search.SearchScreen
 import com.edureminder.quicktube.feature.video.ListPageScreen
+import com.edureminder.quicktube.feature.video.SavedVideosScreen
 import com.edureminder.quicktube.feature.video.VideoScreen
 import kotlinx.coroutines.flow.map
 import org.koin.compose.koinInject
@@ -109,6 +114,8 @@ fun AppNavHost(nav: NavHostController) {
     val showMini = !galleryVideo && dest?.let { d -> !d.hasRoute(PlayerRoute::class) && !d.hasRoute(VideoRoute::class) && !d.hasRoute(GalleryViewerRoute::class) } ?: false
     // A tab screen can swap the floating bar for its own (the gallery's selection actions).
     val barHidden = remember { mutableStateOf(false) }
+    // The mini player only draws when something is loaded; nothing playing = no space kept for it.
+    val miniVisible = showMini && !barHidden.value && playing.current != null
     val activeCount by library.downloads.map { l -> l.count { it.status != DownloadStatus.COMPLETED && it.deletedAt == 0L } }
         .collectAsStateWithLifecycle(0)
 
@@ -116,7 +123,7 @@ fun AppNavHost(nav: NavHostController) {
     fun downloadUrl(url: String) = nav.navigate(router.routeForPasted(url))
     fun openItem(item: MediaItem) = nav.navigate(
         when (item.kind) {
-            ItemKind.VIDEO -> VideoRoute(item.url)
+            ItemKind.VIDEO -> VideoRoute(item.url, item.title.ifBlank { null }, item.thumbnail)
             ItemKind.CHANNEL -> ChannelRoute(item.url)
             ItemKind.PLAYLIST -> PlaylistRoute(item.url)
         },
@@ -136,11 +143,18 @@ fun AppNavHost(nav: NavHostController) {
         // other screens simply stop above the mini player.
         CompositionLocalProvider(LocalBottomBarHeight provides if (onTab) overlayHeight else 0.dp, LocalBottomBarHidden provides barHidden) {
         NavHost(
-            nav, startDestination = HomeRoute, modifier = Modifier.fillMaxSize().padding(bottom = if (onTab) 0.dp else overlayHeight),
+            nav, startDestination = HomeRoute,
+            // Above the mini player on other screens; that space already covers the navigation bar, so screens' own
+            // navigation-bar padding is marked as used (else they'd leave an empty strip on top of it).
+            modifier = Modifier.fillMaxSize().padding(bottom = if (onTab) 0.dp else overlayHeight)
+                .consumeWindowInsets(PaddingValues(bottom = if (onTab) 0.dp else overlayHeight)),
             enterTransition = QtTransitions.push,
             exitTransition = QtTransitions.pushExit,
             popEnterTransition = QtTransitions.popEnter,
             popExitTransition = QtTransitions.popExit,
+            // No predictive-back "shrinking card": a back gesture plays the same plain transition as the back button.
+            predictivePopEnterTransition = { QtTransitions.popEnter(this) },
+            predictivePopExitTransition = { QtTransitions.popExit(this) },
         ) {
             composable<HomeRoute>(
                 enterTransition = QtTransitions.tabEnter, exitTransition = QtTransitions.tabExit,
@@ -163,6 +177,7 @@ fun AppNavHost(nav: NavHostController) {
                             }
                         },
                         openVault = { nav.navigate(VaultRoute) },
+                        openGames = { nav.navigate(GamesRoute) },
                     ),
                     Modifier.statusBarsPadding(),
                 )
@@ -174,7 +189,9 @@ fun AppNavHost(nav: NavHostController) {
                 LibraryScreen(
                     onOpenDownloading = { nav.navigate(DownloadingRoute) },
                     onOpenPlayer = { nav.navigate(PlayerRoute) { launchSingleTop = true } },
+                    onOpenMedia = { GalleryPlayerActivity.start(context, it) },
                     onOpenSource = ::openUrl,
+                    onOpenSaved = { nav.navigate(SavedVideosRoute) },
                 )
             }
             composable<GalleryRoute>(
@@ -211,6 +228,7 @@ fun AppNavHost(nav: NavHostController) {
                 SettingsScreen(
                     SettingsActions(
                         downloadSettings = { nav.navigate(DownloadSettingsRoute) },
+                        playerSettings = { nav.navigate(PlayerSettingsRoute) },
                         notificationSettings = { nav.navigate(NotificationSettingsRoute) },
                         theme = { nav.navigate(ThemeSettingsRoute) },
                         recycleBin = { nav.navigate(RecycleBinRoute) },
@@ -226,6 +244,7 @@ fun AppNavHost(nav: NavHostController) {
                 )
             }
             composable<DownloadSettingsRoute> { DownloadSettingsScreen(nav::popBackStack) }
+            composable<PlayerSettingsRoute> { PlayerSettingsScreen(nav::popBackStack) }
             composable<NotificationSettingsRoute> { NotificationSettingsScreen(nav::popBackStack) }
             composable<ThemeSettingsRoute> { ThemeSettingsScreen(nav::popBackStack) }
             composable<LanguageRoute> { RegionScreen(nav::popBackStack) }
@@ -255,11 +274,15 @@ fun AppNavHost(nav: NavHostController) {
                 )
             }
             composable<VideoRoute> { e ->
-                VideoScreen(e.toRoute<VideoRoute>().url, onBack = nav::popBackStack, onOpen = ::openItem,
-                    onChannel = { nav.navigate(ChannelRoute(it)) })
+                val r = e.toRoute<VideoRoute>()
+                VideoScreen(r.url, previewTitle = r.title, previewThumbnail = r.thumbnail, onBack = nav::popBackStack, onOpen = ::openItem,
+                    onChannel = { nav.navigate(ChannelRoute(it)) },
+                    onPlayNext = { item -> nav.navigate(VideoRoute(item.url, item.title.ifBlank { null }, item.thumbnail)) { popUpTo<VideoRoute> { inclusive = true } } })
             }
+            composable<SavedVideosRoute> { SavedVideosScreen(nav::popBackStack, onOpen = ::openItem) }
             composable<ChannelRoute> { e -> ListPageScreen(e.toRoute<ChannelRoute>().url, true, nav::popBackStack, ::openItem) }
             composable<PlaylistRoute> { e -> ListPageScreen(e.toRoute<PlaylistRoute>().url, false, nav::popBackStack, ::openItem) }
+            composable<GamesRoute> { GamesScreen(nav::popBackStack) }
             composable<HowToRoute> { e ->
                 HowToScreen(e.toRoute<HowToRoute>().platform, nav::popBackStack, openInBrowser = ::openUrl,
                     openStatusSaver = { nav.navigate(StatusSaverRoute) })
@@ -287,7 +310,7 @@ fun AppNavHost(nav: NavHostController) {
             Modifier.align(Alignment.BottomCenter).fillMaxWidth()
                 .onSizeChanged { overlayHeight = with(density) { it.height.toDp() } },
         ) {
-            if (showMini && !barHidden.value) MiniPlayer(onExpand = {
+            if (miniVisible) MiniPlayer(onExpand = {
                 if (galleryId != null) GalleryPlayerActivity.start(context, galleryId) else nav.navigate(PlayerRoute) { launchSingleTop = true }
             })
             if (onTab && !barHidden.value) {
@@ -303,7 +326,7 @@ fun AppNavHost(nav: NavHostController) {
                     },
                     badges = mapOf(1 to activeCount),
                 )
-            } else if (showMini && !barHidden.value) Spacer(Modifier.navigationBarsPadding().height(8.dp))
+            } else if (miniVisible) Spacer(Modifier.navigationBarsPadding().height(8.dp))
         }
     }
     }

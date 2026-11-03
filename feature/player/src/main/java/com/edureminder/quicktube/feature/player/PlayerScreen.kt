@@ -53,21 +53,34 @@ import com.edureminder.quicktube.core.playerui.FullscreenEffect
 import com.edureminder.quicktube.core.playerui.SeekBar
 import com.edureminder.quicktube.core.playerui.SpeedButton
 import com.edureminder.quicktube.core.playerui.VideoPlayerBox
+import com.edureminder.quicktube.core.playerui.AutoPipEffect
+import com.edureminder.quicktube.core.playerui.LocalPipMode
+import com.edureminder.quicktube.core.playerui.enterVideoPip
 import org.koin.compose.koinInject
 
 @Composable
 fun PlayerScreen(onBack: () -> Unit) {
+    val activity = androidx.activity.compose.LocalActivity.current
     val controller = koinInject<PlayerController>()
     val state by controller.state.collectAsStateWithLifecycle()
     var fullscreen by rememberSaveable { mutableStateOf(false) }
     var showQueue by remember { mutableStateOf(false) }
     LaunchedEffect(state.current) { if (state.current == null) onBack() }
-    FullscreenEffect(fullscreen)
+    val inPip = LocalPipMode.current
+    FullscreenEffect(fullscreen && !inPip)
     BackHandler(fullscreen) { fullscreen = false }
+    AutoPipEffect(controller, state)
+    // Back just leaves; only the picture-in-picture button sends the video to the floating window.
+    fun leave(toPip: Boolean = false) {
+        if (toPip) { activity?.enterVideoPip(state); return }
+        onBack()
+    }
+    BackHandler(!fullscreen) { leave() }
     val current = state.current ?: return
 
-    if (fullscreen) {
-        VideoPlayerBox(controller, state, Modifier.fillMaxSize(), fullscreen = true, onToggleFullscreen = { fullscreen = false })
+    if (fullscreen || inPip) {
+        VideoPlayerBox(controller, state, Modifier.fillMaxSize(), fullscreen = true, onToggleFullscreen = { fullscreen = false },
+            overlayControls = !inPip, onPip = { leave(toPip = true) })
         return
     }
     val showVideo = current.isVideo && !state.audioOnly
@@ -79,7 +92,7 @@ fun PlayerScreen(onBack: () -> Unit) {
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Row(Modifier.fillMaxWidth().padding(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            QtIconButton(QtIcons.ExpandMore, "Collapse", onBack)
+            QtIconButton(QtIcons.ExpandMore, "Collapse", { leave() })
             Text(if (state.queue.size > 1) "${state.index + 1} / ${state.queue.size}" else "", Modifier.weight(1f),
                 style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

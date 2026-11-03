@@ -56,6 +56,19 @@ import com.edureminder.quicktube.core.model.ItemKind
 import com.edureminder.quicktube.core.ui.ConfirmDialog
 import com.edureminder.quicktube.core.ui.EmptyBox
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.LaunchedEffect
+import coil3.SingletonImageLoader
+import coil3.request.CachePolicy
+import coil3.request.ImageRequest
+import com.edureminder.quicktube.core.common.Urls
+import com.edureminder.quicktube.core.downloadsheet.DownloadSheetController
+import com.edureminder.quicktube.core.model.DownloadStatus
+import org.koin.compose.koinInject
+import java.io.File
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.koin.compose.viewmodel.koinViewModel
@@ -68,7 +81,33 @@ class DeletedHistoryViewModel(
     private val media: MediaRepository,
     private val downloads: DownloadManager,
 ) : ViewModel() {
-    val items = library.deletedHistory.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    /** Everything downloaded that is no longer on the device, minus what has been downloaded again since. */
+    val items = combine(library.deletedHistory, library.downloads) { deleted, downloads ->
+        val back = downloads.filter { it.status != DownloadStatus.COMPLETED || File(it.filePath).exists() }
+            .mapNotNullTo(HashSet()) { d -> d.pageUrl?.let { it to d.quality } }
+        deleted.filter { it.pageUrl == null || (it.pageUrl to it.quality) !in back }
+    }.flowOn(Dispatchers.IO).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    init {
+        // Files deleted outside QuickTube (another app, a file manager) count as deleted downloads too.
+        viewModelScope.launch { library.archiveMissing() }
+    }
+
+    /** A download with no page to go back to: queue its saved file link again. */
+    fun downloadLink(d: DeletedDownload, done: (Boolean) -> Unit) = viewModelScope.launch {
+        val ext = d.url.substringBefore('?').substringAfterLast('.', "").takeIf { it.length in 2..4 }
+            ?: if (d.mimeType.startsWith("audio")) "m4a" else "mp4"
+        val ok = runCatching {
+            downloads.enqueue(
+                DownloadRequest(
+                    title = d.title, url = d.url, ext = ext, mimeType = d.mimeType, thumbnail = d.thumbnail, quality = d.quality,
+                    durationSec = d.durationSec,
+                ),
+            )
+        }.isSuccess
+        if (ok) library.removeDeletedHistory(listOf(d.id))
+        done(ok)
+    }
 
     fun clear(ids: List<Long>) = viewModelScope.launch { library.removeDeletedHistory(ids) }
 
@@ -115,23 +154,35 @@ private val dayFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
 fun DeletedHistoryScreen(onBack: () -> Unit) {
     val vm = koinViewModel<DeletedHistoryViewModel>()
     val items by vm.items.collectAsStateWithLifecycle()
+    val sheet = koinInject<DownloadSheetController>()
     var selected by remember { mutableStateOf(setOf<Long>()) }
     var confirm by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    // The files are gone, so are their thumbnails: drop any cached copy and show them only from the web while online.
+    LaunchedEffect(items) {
+        val cache = SingletonImageLoader.get(context).diskCache ?: return@LaunchedEffect
+        withContext(Dispatchers.IO) { items.forEach { d -> d.thumbnail?.takeIf { it.startsWith("http") }?.let { cache.remove(it) } } }
+    }
+    fun downloadAgain(d: DeletedDownload) {
+        val page = d.pageUrl
+        // Back to the page it came from, for a fresh link in any quality; the saved link only when there's no page.
+        if (page != null) sheet.open(page)
+        else vm.downloadLink(d) { ok -> Toast.makeText(context, if (ok) "Added to downloads" else "Couldn't download", Toast.LENGTH_SHORT).show() }
+    }
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             QtTopBar(
-                if (selected.isEmpty()) "Deleted history" else "${selected.size} selected", onBack,
-                subtitle = if (selected.isEmpty() && items.isNotEmpty()) "${items.size} file${if (items.size == 1) "" else "s"} you deleted" else null,
+                if (selected.isEmpty()) "Deleted downloads" else "${selected.size} selected", onBack,
+                subtitle = if (selected.isEmpty() && items.isNotEmpty()) "${items.size} file${if (items.size == 1) "" else "s"} no longer on this phone" else null,
             ) {
                 if (items.isNotEmpty()) {
-                    QtIconButton(QtIcons.SelectAll, "Select all", {
+                    if (selected.isNotEmpty()) QtIconButton(QtIcons.SelectAll, "Select all", {
                         selected = if (selected.size == items.size) emptySet() else items.map { it.id }.toSet()
                     })
                     QtIconButton(QtIcons.DeleteSweep, "Clear history", { confirm = true })
                 }
             }
-            if (items.isEmpty()) EmptyBox("No deleted downloads", "Files you delete for good show up here so you can get them back", icon = QtIcons.History)
+            if (items.isEmpty()) EmptyBox("No deleted downloads", "Downloads that are deleted from this phone show up here so you can get them back", icon = QtIcons.History)
             else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 120.dp)) {
                 items.groupBy { dayFormat.format(Date(it.deletedAt)) }.forEach { (day, list) ->
                     item(key = "h$day") {
@@ -157,16 +208,30 @@ fun DeletedHistoryScreen(onBack: () -> Unit) {
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Icon(if (d.mimeType.startsWith("audio")) QtIcons.MusicNote else QtIcons.PlayCircle, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                if (d.thumbnail != null) AsyncImage(d.thumbnail, null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                                if (d.thumbnail?.startsWith("http") == true) AsyncImage(
+                                    ImageRequest.Builder(context).data(d.thumbnail).diskCachePolicy(CachePolicy.DISABLED).build(),
+                                    null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize(),
+                                )
                             }
                             Column(Modifier.weight(1f).padding(start = 12.dp)) {
                                 Text(d.title + (d.quality?.let { " ($it)" } ?: ""), maxLines = 2, overflow = TextOverflow.Ellipsis,
                                     style = MaterialTheme.typography.bodyMedium)
                                 Text(
-                                    listOf(Format.duration(d.durationSec), Format.bytes(d.sizeBytes)).filter { it.isNotBlank() && it != "--" }.joinToString("  ·  "),
+                                    listOfNotNull(Format.duration(d.durationSec), Format.bytes(d.sizeBytes), Urls.host(d.pageUrl ?: d.url))
+                                        .filter { it.isNotBlank() && it != "--" }.joinToString("  ·  "),
                                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(top = 4.dp),
+                                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 4.dp),
                                 )
+                                // Files found on the phone (not downloaded here) have no web address to fetch again.
+                                if (d.pageUrl != null || d.url.startsWith("http")) Row(
+                                    Modifier.padding(top = 8.dp).clip(CircleShape).background(MaterialTheme.colorScheme.primary.copy(alpha = 0.13f))
+                                        .pressable(scaleDown = 0.94f, onClick = { downloadAgain(d) }).padding(horizontal = 12.dp, vertical = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Icon(QtIcons.Download, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+                                    Text("Download again", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(start = 6.dp))
+                                }
                             }
                         }
                     }
@@ -174,7 +239,7 @@ fun DeletedHistoryScreen(onBack: () -> Unit) {
             }
         }
         AnimatedVisibility(
-            items.isNotEmpty(), modifier = Modifier.align(Alignment.BottomCenter),
+            selected.isNotEmpty(), modifier = Modifier.align(Alignment.BottomCenter),
             enter = slideInVertically { it }, exit = slideOutVertically { it },
         ) {
             PillButton(

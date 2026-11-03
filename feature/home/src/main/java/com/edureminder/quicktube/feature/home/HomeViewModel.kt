@@ -30,7 +30,32 @@ data class MusicUi(
 class HomeViewModel(
     private val media: MediaRepository,
     library: com.edureminder.quicktube.core.data.LibraryRepository,
+    private val gamesRepo: com.edureminder.quicktube.core.data.GamesRepository,
+    settings: com.edureminder.quicktube.core.data.SettingsRepository,
 ) : ViewModel() {
+    /** Settings → Trending on home (off by default). */
+    val showTrending = settings.settings.map { it.showTrending }
+        .stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.Eagerly, false)
+
+    /** Our games row (Remote Config, refreshed once per interval, rotated per visit). */
+    val games = gamesRepo.games
+
+    init { gamesRepo.refreshIfDue() }
+
+    /**
+     * Links the plain download sheet can't handle by itself: playlists and channels (their page lists the videos) and
+     * Instagram posts (read in the browser, photos included). These open in the app instead.
+     */
+    fun opensInApp(url: String): Boolean {
+        val u = com.edureminder.quicktube.core.common.Urls.normalize(url)
+        val kind = media.linkKind(u)
+        return kind == com.edureminder.quicktube.core.model.ItemKind.PLAYLIST || kind == com.edureminder.quicktube.core.model.ItemKind.CHANNEL ||
+            com.edureminder.quicktube.core.common.Urls.platformOf(u) == com.edureminder.quicktube.core.common.Platform.INSTAGRAM
+    }
+
+    /** Coming back to the app after a long time away refreshes them too (only when due). */
+    fun refreshGames() = gamesRepo.refreshIfDue()
+
     /** Latest finished downloads for the "Recent downloads" row. */
     val recent = library.downloads
         .map { l -> l.filter { it.status == com.edureminder.quicktube.core.model.DownloadStatus.COMPLETED && !it.inVault }.take(10) }

@@ -11,10 +11,12 @@ import kotlinx.serialization.Serializable
 // Discover / download
 @Serializable data class SearchRoute(val initial: String = "")
 @Serializable data class SearchResultsRoute(val query: String)
-@Serializable data class VideoRoute(val url: String)
+/** [title] and [thumbnail]: what the tapped card showed, so the page can show them while it loads. */
+@Serializable data class VideoRoute(val url: String, val title: String? = null, val thumbnail: String? = null)
 @Serializable data class ChannelRoute(val url: String)
 @Serializable data class PlaylistRoute(val url: String)
 @Serializable data class HowToRoute(val platform: String)
+@Serializable data object GamesRoute
 
 // Browser
 /** [autoDownload]: open the download sheet by itself once the page's video is found (pasted/shared links). */
@@ -26,6 +28,7 @@ import kotlinx.serialization.Serializable
 // Library / player
 @Serializable data object DownloadingRoute
 @Serializable data object PlayerRoute
+@Serializable data object SavedVideosRoute
 
 // Gallery
 @Serializable data class GalleryAlbumRoute(val bucketId: Long, val name: String)
@@ -39,6 +42,7 @@ const val GALLERY_AUDIOS = Long.MIN_VALUE + 3
 
 // Settings
 @Serializable data object DownloadSettingsRoute
+@Serializable data object PlayerSettingsRoute
 @Serializable data object NotificationSettingsRoute
 @Serializable data object ThemeSettingsRoute
 @Serializable data object LanguageRoute

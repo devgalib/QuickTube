@@ -93,12 +93,19 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.edureminder.quicktube.core.designsystem.icon.QtIcons
 import com.edureminder.quicktube.core.designsystem.pressable
 import com.edureminder.quicktube.core.media.PlayerController
+import com.edureminder.quicktube.core.media.VideoDecoderPack
+import com.edureminder.quicktube.core.playerui.PlayerGestureHandler
+import com.edureminder.quicktube.core.playerui.TapZone
+import com.edureminder.quicktube.core.playerui.playerGestures
+import com.edureminder.quicktube.core.playerui.KeepScreenOnWhilePlaying
+import com.edureminder.quicktube.core.playerui.shouldPip
 import com.edureminder.quicktube.core.model.GalleryMedia
 import com.edureminder.quicktube.feature.gallery.GalleryActions
 import com.edureminder.quicktube.feature.gallery.ImmersiveBars
 import com.edureminder.quicktube.feature.gallery.rememberDeleteAction
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
 import org.koin.compose.viewmodel.koinViewModel
 import org.koin.core.parameter.parametersOf
 import kotlin.math.roundToInt
@@ -117,6 +124,7 @@ private val TopBarHeight = 47.dp
 fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
     val vm = koinViewModel<GalleryPlayerViewModel>(key = "player-$mediaId") { parametersOf(mediaId) }
     val controller = vm.controller
+    val decoderPack = koinInject<VideoDecoderPack>()
     val ui by vm.ui.collectAsStateWithLifecycle()
     val state by controller.state.collectAsStateWithLifecycle()
     val player by controller.player.collectAsStateWithLifecycle()
@@ -174,12 +182,17 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
     // The decoder's size has the recording's rotation applied; MediaStore's often doesn't (portrait phone videos).
     val ratio = if (state.videoWidth > 0 && state.videoHeight > 0) state.videoWidth.toFloat() / state.videoHeight
     else current?.let { if (it.width > 0 && it.height > 0) it.width.toFloat() / it.height else 0f } ?: 0f
-    PipActions(activity, controller, state.isPlaying, inPip, ratio)
+    // Settings → Player → Picture-in-picture: going home from a playing video (Android 12+) keeps it floating.
+    // Back closes the player; the picture-in-picture button is the way to float it from here.
+    val pipOnLeave = controller.shouldPip(state)
+    fun leave() = onBack()
+    PipActions(activity, controller, state.isPlaying, inPip, ratio, pipOnLeave)
+    KeepScreenOnWhilePlaying(state.isPlaying && !state.audioOnly && controller.prefs.keepScreenOn)
     BackHandler {
         when {
             sheet != null -> popSheet()
             locked -> lockFlash = System.nanoTime()
-            else -> onBack()
+            else -> leave()
         }
     }
 
@@ -205,7 +218,7 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
     val actions = PlayerActions(
         toggleLock = { locked = !locked; if (locked) { controls = false; lockFlash = System.nanoTime() } else { controls = true; touch() } },
         toggleMute = { vm.toggleMute(); touch() },
-        pip = { if (activity != null) enterPip(activity, ratio, state.isPlaying) },
+        pip = { if (activity != null) enterPip(activity, ratio, state.isPlaying, pipOnLeave) },
         aspect = { say(vm.cycleAspect()); touch() },
         speed = { openSheet(Sheet.SPEED) },
         audioOnly = { controller.setAudioOnly(true) },
@@ -216,7 +229,7 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
         },
         subtitles = { openSheet(Sheet.SUBTITLE) },
         more = { openSheet(Sheet.MORE) },
-        back = onBack,
+        back = ::leave,
         togglePlay = { controller.togglePlay(); touch() },
     )
 
@@ -284,15 +297,24 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
                 ) { ControlCircle(QtIcons.PLock, "Unlock", actions.toggleLock, plain = true) }
             }
         }
-        GestureOverlays(feedback, state.durationMs, landscape, zoom)
-        if ((state.error != null || state.videoUnsupported) && current != null) PlaybackErrorCard(
-            unsupported = state.unsupported || state.videoUnsupported,
-            soundOnly = state.error == null && state.videoUnsupported,
-            hasNext = ui.queue.size > 1,
-            onOpenWith = { GalleryActions.openWith(context, current) },
-            onNext = { controller.next() },
-            modifier = Modifier.align(Alignment.Center),
-        )
+        GestureOverlays(feedback, state.durationMs, landscape, zoom, controller.prefs.seekStepSec, controller.prefs.holdSpeed)
+        if ((state.error != null || state.videoUnsupported) && current != null) {
+            // Video the phone can't decode but FFmpeg can: offer the on-demand decoder instead of another app.
+            val decoderStatus by decoderPack.status.collectAsStateWithLifecycle()
+            val needsDecoder = (state.videoUnsupported || state.videoDecodeFailed) && decoderPack.decodes(state.videoMimeType) &&
+                decoderStatus != VideoDecoderPack.Status.Ready && decoderStatus != VideoDecoderPack.Status.Unavailable
+            PlaybackErrorCard(
+                unsupported = state.unsupported || state.videoUnsupported,
+                soundOnly = state.error == null && state.videoUnsupported,
+                hasNext = ui.queue.size > 1,
+                onOpenWith = { GalleryActions.openWith(context, current) },
+                onNext = { controller.next() },
+                decoder = if (needsDecoder) DecoderOffer(decoderStatus, decoderPack.sizeBytes) {
+                    scope.launch { if (decoderPack.install()) controller.reloadCurrent() }
+                } else null,
+                modifier = Modifier.align(Alignment.Center),
+            )
+        }
         toast?.let { MessagePill(Modifier.align(Alignment.TopCenter).padding(top = status + 91.dp)) { Text(it, color = Color.White, fontSize = 15.sp) } }
     }
 
@@ -451,9 +473,9 @@ private fun LandscapeControls(
             BatteryClock()
         }
         Row(Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(60.dp), verticalAlignment = Alignment.CenterVertically) {
-            ControlCircle(QtIcons.PReplay10, "Back 10 seconds", { controller.seekBy(-10_000) }, plain = true, size = 56.dp, iconSize = 40.dp)
+            ControlCircle(QtIcons.PReplay10, "Back 10 seconds", { controller.seekBy(-controller.prefs.seekStepSec * 1000L) }, plain = true, size = 56.dp, iconSize = 40.dp)
             CenterPlayPause(playing, a.togglePlay, size = 56.dp)
-            ControlCircle(QtIcons.PForward10, "Forward 10 seconds", { controller.seekBy(10_000) }, plain = true, size = 56.dp, iconSize = 40.dp)
+            ControlCircle(QtIcons.PForward10, "Forward 10 seconds", { controller.seekBy(controller.prefs.seekStepSec * 1000L) }, plain = true, size = 56.dp, iconSize = 40.dp)
         }
         Column(Modifier.align(Alignment.BottomStart).fillMaxWidth()) {
             PillSeekBar(position, durationMs, controller::seekTo, Modifier.fillMaxWidth().padding(horizontal = 60.dp))
@@ -509,7 +531,7 @@ private class GestureFeedback {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun GestureOverlays(f: GestureFeedback, durationMs: Long, landscape: Boolean, video: VideoZoom) {
+private fun GestureOverlays(f: GestureFeedback, durationMs: Long, landscape: Boolean, video: VideoZoom, seekStep: Int, holdSpeed: Float) {
     LaunchedEffect(f.doubleTapAt) { if (f.doubleTap != null) { delay(650); f.doubleTap = null } }
     val status = WindowInsets.statusBarsIgnoringVisibility.asPaddingValues().calculateTopPadding()
     Box(Modifier.fillMaxSize()) {
@@ -541,7 +563,7 @@ private fun GestureOverlays(f: GestureFeedback, durationMs: Long, landscape: Boo
         ) {
             MessagePill {
                 HoldChevrons(Modifier.size(20.dp, 12.dp))
-                Text("2.0X Speed", color = Color.White, fontSize = 15.sp)
+                Text("${holdSpeed}X Speed", color = Color.White, fontSize = 15.sp)
             }
         }
         f.doubleTap?.let { zone ->
@@ -550,7 +572,7 @@ private fun GestureOverlays(f: GestureFeedback, durationMs: Long, landscape: Boo
                     .padding(horizontal = if (landscape) 160.dp else 60.dp),
             ) {
                 if (zone == TapZone.LEFT) Icon(QtIcons.PFastRewind, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                Text(if (zone == TapZone.RIGHT) "+10S" else "-10S", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text((if (zone == TapZone.RIGHT) "+" else "-") + "${seekStep}S", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 if (zone == TapZone.RIGHT) Icon(QtIcons.PFastForward, null, tint = Color.White, modifier = Modifier.size(16.dp))
             }
         }
@@ -582,13 +604,18 @@ private fun rememberGestureHandler(
             var seekBase = 0L
             var seekAcc = 0f
             var lastSeek = 0L
+            var verticalOff = false
+            var seekOff = false
             override val enabled get() = !locked()
             override val zoomed get() = videoZoom.zoomed
             override fun onTap() = tap()
             override fun onDoubleTap(zone: TapZone) {
+                // Settings → Player → Gestures: without double tap, a second tap is just another tap.
+                if (!controller.prefs.gestureDoubleTap) return tap()
+                val step = controller.prefs.seekStepSec * 1000L
                 when (zone) {
-                    TapZone.LEFT -> controller.seekBy(-10_000)
-                    TapZone.RIGHT -> controller.seekBy(10_000)
+                    TapZone.LEFT -> controller.seekBy(-step)
+                    TapZone.RIGHT -> controller.seekBy(step)
                     TapZone.CENTER -> controller.togglePlay()
                 }
                 f.doubleTap = zone
@@ -596,13 +623,14 @@ private fun rememberGestureHandler(
             }
             override val holding get() = f.holding
             override fun onHoldStart(position: Offset, size: IntSize) {
+                if (!controller.prefs.gestureHoldSpeed) return
                 holdPrevious = controller.state.value.speed
                 // Right third: the system player's speed list, starting at the row under the finger. Elsewhere: 2.0X.
                 f.picker = position.x > size.width * 2f / 3f
                 val rows = HoldGeometry(size.height.toFloat(), Density(context))
                 holdRows = rows
                 f.pickerIndex = rows.rowAt(position.y)
-                controller.setSpeed(if (f.picker) HoldSpeeds[f.pickerIndex] else 2f)
+                controller.setSpeed(if (f.picker) HoldSpeeds[f.pickerIndex] else controller.prefs.holdSpeed)
                 view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
                 f.holding = true
                 hold()
@@ -623,6 +651,8 @@ private fun rememberGestureHandler(
                 f.picker = false
             }
             override fun onVerticalStart(left: Boolean) {
+                verticalOff = if (left) !controller.prefs.gestureBrightness else !controller.prefs.gestureVolume
+                if (verticalOff) return
                 level = if (left) {
                     window?.attributes?.screenBrightness?.takeIf { it >= 0 }
                         ?: (Settings.System.getInt(context.contentResolver, Settings.System.SCREEN_BRIGHTNESS, 128) / 255f)
@@ -630,6 +660,7 @@ private fun rememberGestureHandler(
                 f.level = left to level
             }
             override fun onVertical(left: Boolean, delta: Float) {
+                if (verticalOff) return
                 // A full-height swipe covers the whole range.
                 level = (level + delta * 1.2f).coerceIn(0f, 1f)
                 if (left) window?.attributes = window?.attributes?.apply { screenBrightness = level.coerceAtLeast(0.01f) }
@@ -641,11 +672,14 @@ private fun rememberGestureHandler(
                 f.level = left to level
             }
             override fun onSeekStart() {
+                seekOff = !controller.prefs.gestureSeek
+                if (seekOff) return
                 seekBase = controller.currentPositionMs
                 seekAcc = 0f
                 f.seekPreview = seekBase
             }
             override fun onSeek(delta: Float) {
+                if (seekOff) return
                 // A full-width swipe spans the whole video, or three minutes of a long one.
                 seekAcc += delta
                 val span = duration.coerceIn(30_000, 180_000)
@@ -680,7 +714,7 @@ private const val PIP_PREV = "com.edureminder.quicktube.gallery.PIP_PREV"
 private const val PIP_PLAY = "com.edureminder.quicktube.gallery.PIP_PLAY"
 private const val PIP_NEXT = "com.edureminder.quicktube.gallery.PIP_NEXT"
 
-private fun pipParams(activity: Activity, ratio: Float, playing: Boolean): PictureInPictureParams {
+private fun pipParams(activity: Activity, ratio: Float, playing: Boolean, autoEnter: Boolean): PictureInPictureParams {
     fun action(icon: Int, title: String, action: String, code: Int) = RemoteAction(
         Icon.createWithResource(activity, icon), title, title,
         PendingIntent.getBroadcast(activity, code, Intent(action).setPackage(activity.packageName), PendingIntent.FLAG_IMMUTABLE),
@@ -696,18 +730,19 @@ private fun pipParams(activity: Activity, ratio: Float, playing: Boolean): Pictu
                 action(android.R.drawable.ic_media_next, "Next", PIP_NEXT, 3),
             ),
         )
+        .apply { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) setAutoEnterEnabled(autoEnter) }
         .build()
 }
 
-private fun enterPip(activity: Activity, ratio: Float, playing: Boolean) {
-    val ok = runCatching { activity.enterPictureInPictureMode(pipParams(activity, ratio, playing)) }
+private fun enterPip(activity: Activity, ratio: Float, playing: Boolean, autoEnter: Boolean) {
+    val ok = runCatching { activity.enterPictureInPictureMode(pipParams(activity, ratio, playing, autoEnter)) }
         .onFailure { android.util.Log.w("GalleryPlayer", "PiP failed", it) }.getOrDefault(false)
     if (!ok) Toast.makeText(activity, "Picture-in-picture isn't available", Toast.LENGTH_SHORT).show()
 }
 
 /** Previous / play-pause / next buttons on the picture-in-picture window. */
 @Composable
-private fun PipActions(activity: Activity?, controller: PlayerController, playing: Boolean, inPip: Boolean, ratio: Float) {
+private fun PipActions(activity: Activity?, controller: PlayerController, playing: Boolean, inPip: Boolean, ratio: Float, autoEnter: Boolean) {
     if (activity == null) return
     DisposableEffect(activity) {
         val receiver = object : BroadcastReceiver() {
@@ -723,8 +758,11 @@ private fun PipActions(activity: Activity?, controller: PlayerController, playin
         ContextCompat.registerReceiver(activity, receiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
         onDispose { activity.unregisterReceiver(receiver) }
     }
-    LaunchedEffect(playing, inPip, ratio) {
-        runCatching { activity.setPictureInPictureParams(pipParams(activity, ratio, playing)) }
+    LaunchedEffect(playing, inPip, ratio, autoEnter) {
+        // Never while the window is being closed (dragged to ✕): a new layout mid-animation leaves it stuck.
+        val started = (activity as? ComponentActivity)?.lifecycle?.currentState?.isAtLeast(Lifecycle.State.STARTED) != false
+        if (inPip && !started) return@LaunchedEffect
+        runCatching { activity.setPictureInPictureParams(pipParams(activity, ratio, playing, autoEnter)) }
     }
 }
 
@@ -738,9 +776,25 @@ private class TouchClock {
     fun mark() { at = System.currentTimeMillis() }
 }
 
-/** Shown when a file can't play: the phone can't decode its format (HEVC 10-bit, WMV…) or the file is broken. */
+/** The on-demand video decoder offered on [PlaybackErrorCard]: its [status], download size and the download action. */
+private class DecoderOffer(val status: VideoDecoderPack.Status, val sizeBytes: Long, val onDownload: () -> Unit)
+
+/**
+ * Shown when a file can't play: the phone can't decode its format (HEVC 10-bit, WMV…) or the file is broken. When the
+ * video decoder pack can play it ([decoder]), the card offers that download instead of opening another app.
+ */
 @Composable
-private fun PlaybackErrorCard(unsupported: Boolean, soundOnly: Boolean, hasNext: Boolean, onOpenWith: () -> Unit, onNext: () -> Unit, modifier: Modifier) {
+private fun PlaybackErrorCard(
+    unsupported: Boolean,
+    soundOnly: Boolean,
+    hasNext: Boolean,
+    onOpenWith: () -> Unit,
+    onNext: () -> Unit,
+    decoder: DecoderOffer?,
+    modifier: Modifier,
+) {
+    val downloading = decoder?.status as? VideoDecoderPack.Status.Downloading
+    val failed = decoder?.status as? VideoDecoderPack.Status.Failed
     Column(
         modifier.padding(horizontal = 36.dp).clip(RoundedCornerShape(24.dp)).background(SheetColor).padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -749,6 +803,7 @@ private fun PlaybackErrorCard(unsupported: Boolean, soundOnly: Boolean, hasNext:
         Spacer(Modifier.height(14.dp))
         Text(
             when {
+                decoder != null -> "This video needs a decoder"
                 soundOnly -> "This phone can't show this video"
                 unsupported -> "This phone can't play this format"
                 else -> "Can't play this file"
@@ -758,23 +813,43 @@ private fun PlaybackErrorCard(unsupported: Boolean, soundOnly: Boolean, hasNext:
         Spacer(Modifier.height(6.dp))
         Text(
             when {
+                failed != null -> failed.message
+                decoder != null -> "Its video format isn't supported by this phone. Download QuickTube's video decoder " +
+                    "(%.1f MB) once to play it and other videos like it.".format(java.util.Locale.US, decoder.sizeBytes / 1_048_576f)
                 soundOnly -> "Its video uses a codec this phone has no decoder for, so only the sound plays. Another player app may still show it."
                 unsupported -> "Its video or audio uses a codec this phone has no decoder for. Another player app may still open it."
                 else -> "The file may be damaged or still being written."
             },
             color = Color.White.copy(alpha = 0.6f), fontSize = 13.sp, textAlign = androidx.compose.ui.text.style.TextAlign.Center,
         )
+        if (downloading != null) {
+            Spacer(Modifier.height(16.dp))
+            val progress by androidx.compose.animation.core.animateFloatAsState(downloading.progress, label = "decoder")
+            Box(Modifier.fillMaxWidth().height(4.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.12f))) {
+                Box(
+                    Modifier.fillMaxWidth(progress).height(4.dp).clip(CircleShape)
+                        .background(com.edureminder.quicktube.core.designsystem.LocalQtExtras.current.brand),
+                )
+            }
+        }
         Spacer(Modifier.height(18.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (hasNext) Box(
                 Modifier.height(42.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.12f)).pressable(onClick = onNext).padding(horizontal = 18.dp),
                 contentAlignment = Alignment.Center,
             ) { Text("Next video", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium) }
+            val label = when {
+                downloading != null -> "Downloading %d%%".format(java.util.Locale.US, (downloading.progress * 100).roundToInt())
+                failed != null -> "Retry"
+                decoder != null -> "Download"
+                else -> "Open with…"
+            }
             Box(
                 Modifier.height(42.dp).clip(CircleShape).background(com.edureminder.quicktube.core.designsystem.LocalQtExtras.current.brand)
-                    .pressable(onClick = onOpenWith).padding(horizontal = 18.dp),
+                    .pressable(onClick = { if (decoder == null) onOpenWith() else if (downloading == null) decoder.onDownload() })
+                    .padding(horizontal = 18.dp),
                 contentAlignment = Alignment.Center,
-            ) { Text("Open with…", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
+            ) { Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
         }
     }
 }

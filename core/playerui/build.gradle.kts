@@ -9,4 +9,5 @@ dependencies {
     api(libs.androidx.media3.ui.compose)
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.coil.compose)
 }

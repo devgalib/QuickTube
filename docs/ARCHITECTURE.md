@@ -67,6 +67,12 @@ feature/
   MediaStore's cached thumbnails from a small LRU. Videos open in the app's player; deleting goes through the system trash dialog.
 - **Playback**: `PlayerController.play(items)` → `MediaController` → `PlaybackService` (ExoPlayer). Separate video+audio URLs
   are played with a `MergingMediaSource`. YouTube's CDN gets bounded range requests via `ChunkedHttpDataSource`, because open-ended reads are throttled.
+  `PlayerController` also keeps the playback history (`PlaybackHistoryRepository`, Room, capped at 300, least recently opened
+  evicted) and resumes from it, keyed by file path or page URL, following Settings → Player (`AppSettings`).
+- **Picture-in-picture**: the player's picture-in-picture button shrinks the activity showing the video (the gallery
+  player's own task, or the main activity for the video page and the library player) in one animation; going home from a
+  playing video does the same. Back always closes the video. Screens report their video through `PipState` (`core:playerui`).
+- **Our games** (home row + See all): Firebase Remote Config, cached and refreshed once per interval; see [PROMO_GAMES.md](PROMO_GAMES.md).
 
 ## iOS / multiplatform path
 

@@ -86,8 +86,20 @@ class ShareActivity : ComponentActivity() {
             finish()
             return false
         }
-        sheet.open(url)
         get<com.edureminder.quicktube.core.analytics.Analytics>().event(com.edureminder.quicktube.core.analytics.Events.SHARE_TO_DOWNLOAD)
+        // A shared playlist or channel opens in QuickTube itself (its page, where any or all videos can be downloaded):
+        // there's no single video for the sheet to show.
+        val kind = get<com.edureminder.quicktube.core.data.MediaRepository>().linkKind(Urls.normalize(url))
+        if (kind == com.edureminder.quicktube.core.model.ItemKind.PLAYLIST || kind == com.edureminder.quicktube.core.model.ItemKind.CHANNEL) {
+            startActivity(Intent(this, MainActivity::class.java).setAction(Intent.ACTION_VIEW).setData(android.net.Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            finish()
+            return false
+        }
+        // Instagram posts (photos and carousels too) are read from the post in the invisible browser straight away.
+        if (com.edureminder.quicktube.core.extractor.InstagramReader.shortcode(url) != null) {
+            sheet.openDirect(com.edureminder.quicktube.core.downloadsheet.SheetTarget.Page(url, browserFirst = true))
+        } else sheet.open(url)
         return true
     }
 

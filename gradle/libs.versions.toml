@@ -23,6 +23,8 @@ coroutines = "1.10.2"
 media3 = "1.11.1"
 # Prebuilt FFmpeg audio decoders (AC-3, E-AC-3, DTS, TrueHD, WMA…) for Media3, by Jellyfin.
 media3Ffmpeg = "1.9.0+1"
+# FFmpeg video decoders (HEVC 10-bit, H.264 High 10…) for Media3, by Next Player; must match the media3 version.
+nextlib = "1.11.1-0.17.0"
 documentfile = "1.1.0"
 webkit = "1.18.0"
 ytdlp = "0.18.1"
@@ -64,6 +66,7 @@ youtubedl-android-common = { group = "io.github.junkfood02.youtubedl-android", n
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
 firebase-analytics = { group = "com.google.firebase", name = "firebase-analytics" }
 firebase-crashlytics = { group = "com.google.firebase", name = "firebase-crashlytics" }
+firebase-config = { group = "com.google.firebase", name = "firebase-config" }
 androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "webkit" }
 androidx-documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
 androidx-media3-exoplayer = { group = "androidx.media3", name = "media3-exoplayer", version.ref = "media3" }
@@ -74,6 +77,7 @@ androidx-media3-exoplayer-hls = { group = "androidx.media3", name = "media3-exop
 androidx-media3-session = { group = "androidx.media3", name = "media3-session", version.ref = "media3" }
 androidx-media3-ui-compose = { group = "androidx.media3", name = "media3-ui-compose", version.ref = "media3" }
 media3-ffmpeg-decoder = { group = "org.jellyfin.media3", name = "media3-ffmpeg-decoder", version.ref = "media3Ffmpeg" }
+nextlib-media3ext = { group = "io.github.anilbeesetti", name = "nextlib-media3ext", version.ref = "nextlib" }
 androidx-media3-inspector = { group = "androidx.media3", name = "media3-inspector", version.ref = "media3" }
 androidx-media3-ui = { group = "androidx.media3", name = "media3-ui", version.ref = "media3" }
 koin-bom = { group = "io.insert-koin", name = "koin-bom", version.ref = "koin" }

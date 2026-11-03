@@ -83,7 +83,7 @@ fun DownloadSheetHost(
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var showAll by remember(t) { mutableStateOf(false) }
-    var deepSearching by remember(t) { mutableStateOf(false) }
+    var deepSearching by remember(t) { mutableStateOf(t is SheetTarget.Page && t.browserFirst && onDeepSearch != null) }
     val notFound = !ui.loading && ui.options.isEmpty() && ui.error != null && !ui.isLive && t is SheetTarget.Page
     LaunchedEffect(t, notFound) {
         val page = ui.pageUrl ?: (t as? SheetTarget.Page)?.url
@@ -139,6 +139,17 @@ fun DownloadSheetHost(
     // A sensible choice is ready: ~720p video (or the best below it), else the first format.
     var selectedId by remember(t) { mutableStateOf<String?>(null) }
     val selected = ui.options.firstOrNull { it.id == selectedId } ?: defaultChoice(ui.options)
+    // A post's photos and videos: all of them ticked to start with.
+    var picked by remember(t, ui.options) { mutableStateOf(ui.options.map { it.id }.toSet()) }
+    val downloadPicked = start@{
+        val chosen = ui.options.filter { it.id in picked }
+        if (chosen.isEmpty()) return@start
+        if (!Permissions.granted(context, Permissions.storageWrite)) { storageLauncher.launch(Permissions.storageWrite); return@start }
+        vm.downloadItems(chosen)
+        Toast.makeText(context, if (chosen.size == 1) "Added to downloads" else "${chosen.size} added to downloads", Toast.LENGTH_SHORT).show()
+        controller.dismiss()
+        onDownloadStarted()
+    }
 
     ModalBottomSheet(onDismissRequest = controller::dismiss, sheetState = sheetState, containerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
         Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
@@ -150,12 +161,12 @@ fun DownloadSheetHost(
                             Text("All formats", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
                                 modifier = Modifier.padding(start = 4.dp))
                         }
-                    } else if (!ui.loading) {
+                    } else if (!ui.loading && !deepSearching) {
                         Header(ui)
                     }
                     when {
                         ui.loading -> SheetSkeleton(null)
-                        deepSearching -> SheetSkeleton("Looking for the video on the page…")
+                        deepSearching -> SheetSkeleton("Looking for media on the page…")
                         ui.options.isEmpty() -> Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
                             ErrorBox(ui.error ?: "No downloadable media found on this page", if (ui.isLive) null else vm::retry,
                                 Modifier.fillMaxWidth().heightIn(min = 180.dp))
@@ -165,6 +176,12 @@ fun DownloadSheetHost(
                                 "Open in QuickTube browser", { controller.dismiss(); onOpenInBrowser(page) },
                                 Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
                             )
+                        }
+                        ui.items -> LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                            item { SectionLabel(if (ui.options.size > 1) "${ui.options.size} items in this post" else "In this post") }
+                            items(ui.options, key = { it.id }) { o ->
+                                ItemRow(o, o.id in picked) { picked = if (o.id in picked) picked - o.id else picked + o.id }
+                            }
                         }
                         else -> {
                             val list = if (all) ordered(ui.options) else quickPicks(ui.options)
@@ -197,7 +214,19 @@ fun DownloadSheetHost(
                     }
                 }
             }
-            if (!ui.loading && !deepSearching && selected != null) {
+            if (!ui.loading && !deepSearching && ui.items && ui.options.isNotEmpty()) {
+                val n = picked.size
+                PillButton(
+                    when {
+                        ui.options.size == 1 -> "Download"
+                        n == ui.options.size -> "Download all ($n)"
+                        else -> "Download $n item${if (n == 1) "" else "s"}"
+                    },
+                    { downloadPicked() },
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 10.dp),
+                    icon = QtIcons.Download, enabled = n > 0,
+                )
+            } else if (!ui.loading && !deepSearching && selected != null) {
                 val size = selected.shownSize()
                 PillButton(
                     "Download · " + shortName(selected) + (if (size > 0) " · " + Format.bytes(size) else ""),
@@ -381,6 +410,29 @@ private fun OptionRow(o: DownloadOption, detailed: Boolean, selected: Boolean, o
         ) {
             if (selected) Icon(QtIcons.Check, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(14.dp))
         }
+    }
+}
+
+/** One photo or video of a post, with its picture and a tick box. */
+@Composable
+private fun ItemRow(o: DownloadOption, checked: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().pressable(scaleDown = 0.99f, haptic = true, onClick = onToggle).padding(horizontal = 20.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Thumbnail(o.thumbnail, Modifier.size(56.dp), corner = 10) {
+            if (o.kind == FormatKind.VIDEO) Icon(QtIcons.PlayCircle, null, tint = androidx.compose.ui.graphics.Color.White,
+                modifier = Modifier.align(Alignment.Center).size(22.dp))
+        }
+        Column(Modifier.weight(1f).padding(start = 14.dp)) {
+            Text(o.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(o.info, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Box(
+            Modifier.size(22.dp).clip(RoundedCornerShape(6.dp)).background(if (checked) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent)
+                .then(if (checked) Modifier else Modifier.border(1.5.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))),
+            contentAlignment = Alignment.Center,
+        ) { if (checked) Icon(QtIcons.Check, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(16.dp)) }
     }
 }
 

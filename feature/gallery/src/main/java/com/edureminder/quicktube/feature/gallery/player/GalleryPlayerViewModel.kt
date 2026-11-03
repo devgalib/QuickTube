@@ -11,6 +11,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.Player
 import com.edureminder.quicktube.core.data.GalleryRepository
+import com.edureminder.quicktube.core.data.SettingsRepository
+import com.edureminder.quicktube.core.model.VideoEndMode
 import com.edureminder.quicktube.core.download.MediaMerger
 import com.edureminder.quicktube.core.media.PlayItem
 import com.edureminder.quicktube.core.media.PlayerController
@@ -28,6 +30,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 
 /** How the video fills the screen; cycled by the aspect button like the system player. */
@@ -62,12 +65,13 @@ class GalleryPlayerViewModel(
     private val mediaId: Long,
     private val repo: GalleryRepository,
     val controller: PlayerController,
+    private val settings: SettingsRepository,
 ) : AndroidViewModel(app) {
     private val prefs = app.getSharedPreferences("gallery_player", 0)
     private val _ui = MutableStateFlow(
         GalleryPlayerUi(
             aspect = AspectMode.entries.getOrElse(prefs.getInt("aspect", 0)) { AspectMode.FIT },
-            mode = PlayMode.entries.getOrElse(prefs.getInt("mode", PlayMode.REPEAT_ONE.ordinal)) { PlayMode.REPEAT_ONE },
+            mode = controller.prefs.videoEndMode.toPlayMode(),
             showTutorial = !prefs.getBoolean("tutorial_seen", false),
         ),
     )
@@ -78,7 +82,14 @@ class GalleryPlayerViewModel(
     init {
         repo.load()
         viewModelScope.launch {
-            val all = repo.library.filterNotNull().first { it.complete }.items
+            var all = repo.library.filterNotNull().first { it.complete }.items
+            // A file scanned in just now (a download opened from the library) isn't in the loaded list yet: reload once.
+            if (all.none { it.id == mediaId }) {
+                repo.load(force = true)
+                all = withTimeoutOrNull(8_000) {
+                    repo.library.filterNotNull().first { l -> l.complete && l.items.any { it.id == mediaId } }.items
+                } ?: all
+            }
             // Always the opened file's own folder (and kind), whichever album or tab it was opened from.
             val media = all.firstOrNull { it.id == mediaId } ?: return@launch
             val videos = GallerySections.folderQueue(all, media)
@@ -90,7 +101,10 @@ class GalleryPlayerViewModel(
             if (queue.isEmpty()) return@launch
             controller.play(queue.map { it.toPlayItem() }, at - from, audioOnly = media.isAudio)
             controller.setVolume(1f)
-            applyMode(_ui.value.mode)
+            // Settings → Player → When a video ends (also changed from the player's own menu).
+            val mode = settings.current().videoEndMode.toPlayMode()
+            _ui.update { it.copy(mode = mode) }
+            applyMode(mode)
             refreshFavorite()
         }
     }
@@ -114,7 +128,7 @@ class GalleryPlayerViewModel(
     }
 
     fun setMode(mode: PlayMode) {
-        prefs.edit().putInt("mode", mode.ordinal).apply()
+        viewModelScope.launch { settings.update { it.copy(videoEndMode = VideoEndMode.valueOf(mode.name)) } }
         _ui.update { it.copy(mode = mode) }
         applyMode(mode)
     }
@@ -215,7 +229,10 @@ class GalleryPlayerViewModel(
 
     private fun GalleryMedia.toPlayItem() = PlayItem(
         id = "gallery:$id", uri = uri.toString(), title = name.substringBeforeLast('.'), artist = artist, isVideo = !isAudio,
+        historyKey = path.ifBlank { null },
     )
+
+    private fun VideoEndMode.toPlayMode() = PlayMode.valueOf(name)
 
     private companion object {
         const val QUEUE = 100

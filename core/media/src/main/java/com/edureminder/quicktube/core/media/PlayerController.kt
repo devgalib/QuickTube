@@ -7,12 +7,14 @@ import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.text.CueGroup
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
@@ -26,6 +28,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import com.edureminder.quicktube.core.data.PlaybackHistoryRepository
+import com.edureminder.quicktube.core.data.SettingsRepository
+import com.edureminder.quicktube.core.model.AppSettings
+import java.util.concurrent.ConcurrentHashMap
 
 /** Something the shared player can play: a downloaded file or an online stream. */
 data class PlayItem(
@@ -38,7 +44,11 @@ data class PlayItem(
     /** Separate audio stream to merge (video-only online streams). */
     val audioUri: String? = null,
     val startPositionMs: Long = 0,
-)
+    /** Key in the playback history (file path, page URL); defaults to [id]. */
+    val historyKey: String? = null,
+) {
+    val resumeKey: String get() = historyKey ?: id
+}
 
 data class PlaybackState(
     val current: PlayItem? = null,
@@ -46,6 +56,8 @@ data class PlaybackState(
     val index: Int = 0,
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
+    /** Played to the end and stopped there (not repeating). */
+    val ended: Boolean = false,
     val positionMs: Long = 0,
     val durationMs: Long = 0,
     val bufferedMs: Long = 0,
@@ -60,12 +72,33 @@ data class PlaybackState(
     val unsupported: Boolean = false,
     /** The file has video but this phone can't decode it (e.g. MPEG-2 on some phones): only the sound would play. */
     val videoUnsupported: Boolean = false,
+    /** The error came from the video decoder (e.g. 10-bit HEVC the phone's decoder claims but can't play). */
+    val videoDecodeFailed: Boolean = false,
+    /** MIME type of the video that couldn't be decoded ([videoUnsupported] or [videoDecodeFailed]), e.g. video/hevc. */
+    val videoMimeType: String? = null,
 )
 
 /** App-side handle to [PlaybackService]; UI observes [state] and renders [player]. */
 @OptIn(UnstableApi::class)
-class PlayerController(private val context: Context) {
+class PlayerController(
+    private val context: Context,
+    private val history: PlaybackHistoryRepository? = null,
+    settingsRepo: SettingsRepository? = null,
+) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    /** Settings → Player, kept current for synchronous reads. */
+    @Volatile var prefs = AppSettings()
+        private set
+    /** Last saved position per history key, so [play] can resume without waiting for the database. */
+    private val positions = ConcurrentHashMap<String, Long>()
+
+    init {
+        settingsRepo?.let { repo -> scope.launch { repo.settings.collect { prefs = it } } }
+        // Follows the database, so clearing the history (Settings → Player) also stops resuming.
+        history?.let { h ->
+            scope.launch { h.entries.collect { list -> positions.keys.retainAll(list.mapTo(HashSet()) { it.key }); list.forEach { positions[it.key] = it.positionMs } } }
+        }
+    }
     private val _state = MutableStateFlow(PlaybackState())
     val state: StateFlow<PlaybackState> = _state.asStateFlow()
     private val _player = MutableStateFlow<Player?>(null)
@@ -105,7 +138,10 @@ class PlayerController(private val context: Context) {
     fun play(items: List<PlayItem>, startIndex: Int = 0, audioOnly: Boolean = false) = withController { c ->
         saveCurrentPosition()
         queue = items
-        c.setMediaItems(items.map { it.toMediaItem() }, startIndex, items.getOrNull(startIndex)?.startPositionMs ?: 0)
+        val first = items.getOrNull(startIndex)
+        c.setMediaItems(items.map { it.toMediaItem() }, startIndex, first?.let(::startPosition) ?: 0)
+        c.playbackParameters = PlaybackParameters(prefs.playbackSpeed)
+        first?.let { markOpened(it) }
         setAudioOnlyInternal(c, audioOnly || items.getOrNull(startIndex)?.isVideo == false)
         c.prepare()
         c.play()
@@ -123,6 +159,17 @@ class PlayerController(private val context: Context) {
         recover(it)
     }
     fun skipTo(index: Int) = withController { it.seekToDefaultPosition(index); recover(it); it.play() }
+
+    /**
+     * Plays the current item again from where it was, choosing its tracks afresh: after [VideoDecoderPack] is installed,
+     * video the phone couldn't decode now goes to the FFmpeg renderer.
+     */
+    fun reloadCurrent() = withController { c ->
+        _state.update { it.copy(error = null, videoDecodeFailed = false) }
+        c.stop()
+        c.prepare()
+        c.play()
+    }
 
     /** After a file failed to play the player sits idle; moving to another item has to prepare it again. */
     private fun recover(c: MediaController) {
@@ -198,26 +245,79 @@ class PlayerController(private val context: Context) {
         if (c.duration > 0) {
             val pos = if (c.currentPosition >= c.duration - 2000) 0 else c.currentPosition
             onPositionSave?.invoke(cur.id, pos)
+            record(cur, pos, c.duration)
         }
     }
+
+    /** Where [item] starts: its own start position, else where it was left last time (Settings → Player → Resume). */
+    private fun startPosition(item: PlayItem): Long = when {
+        item.startPositionMs > 0 -> item.startPositionMs
+        prefs.playHistory && prefs.resumePlayback -> positions[item.resumeKey]?.takeIf { it > RESUME_MIN_MS } ?: 0
+        else -> 0
+    }
+
+    private fun record(item: PlayItem, positionMs: Long, durationMs: Long, opened: Boolean = false) {
+        if (!prefs.playHistory) return
+        positions[item.resumeKey] = positionMs
+        val h = history ?: return
+        scope.launch { runCatching { h.save(item.resumeKey, item.title, positionMs, durationMs, opened) } }
+    }
+
+    private fun markOpened(item: PlayItem) = record(item, positions[item.resumeKey] ?: 0, 0, opened = true)
 
     private val listener = object : Player.Listener {
         override fun onEvents(player: Player, events: Player.Events) = sync(player)
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             val prev = _state.value.current
             if (prev != null) onPositionSave?.invoke(prev.id, 0)
+            if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) return
+            // Played to the end: start over next time. Skipped away: remember where it was.
+            if (prev != null && prev.id != mediaItem?.mediaId) {
+                val st = _state.value
+                val finished = reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO || st.positionMs >= st.durationMs - 2000
+                record(prev, if (finished) 0 else st.positionMs, st.durationMs)
+            }
+            val next = queue.firstOrNull { it.id == mediaItem?.mediaId } ?: return
+            markOpened(next)
+            if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
+                val at = startPosition(next)
+                if (at > 0) _player.value?.seekTo(at)
+            }
+        }
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (!isPlaying) saveCurrentPosition()
         }
         override fun onCues(cueGroup: CueGroup) {
             _cues.value = cueGroup.cues.mapNotNull { it.text?.toString() }.joinToString("\n")
         }
         override fun onPlayerError(error: PlaybackException) {
-            _state.update { it.copy(error = error.errorCodeName.removePrefix("ERROR_CODE_").replace('_', ' ').lowercase(), unsupported = error.errorCode in UNSUPPORTED) }
+            // The controller only gets a copy of the error; the service's player (same process) knows which renderer failed.
+            val videoFormat = (PlaybackService.exo?.playerError)
+                ?.takeIf { it.type == ExoPlaybackException.TYPE_RENDERER }?.rendererFormat
+                ?.takeIf { MimeTypes.isVideo(it.sampleMimeType) }
+            // Reading a file too big for the player's memory (an index of tens of millions of samples) ends in an
+            // "io unspecified" error that says nothing; say what to do instead.
+            val outOfMemory = generateSequence<Throwable>(PlaybackService.exo?.playerError ?: error) { it.cause }.take(10)
+                .any { it is OutOfMemoryError }
+            _state.update {
+                it.copy(
+                    error = if (outOfMemory) "this video is too long for QuickTube's player. Use Open with in its ⋮ menu to play it in another app"
+                    else error.errorCodeName.removePrefix("ERROR_CODE_").replace('_', ' ').lowercase(),
+                    unsupported = error.errorCode in UNSUPPORTED,
+                    videoDecodeFailed = videoFormat != null,
+                    videoMimeType = videoFormat?.sampleMimeType ?: it.videoMimeType,
+                )
+            }
         }
     }
 
     private fun sync(p: Player) {
         val idx = p.currentMediaItemIndex
         val vs = p.videoSize
+        val videoGroups = p.currentTracks.groups.filter { it.type == C.TRACK_TYPE_VIDEO }
+        // (isSupported(true): a video above the decoder's rated size, like 4K, still plays.)
+        val videoUnsupported = videoGroups.isNotEmpty() && videoGroups.none { it.isSupported(true) }
+        val unsupportedMime = videoGroups.firstOrNull()?.getTrackFormat(0)?.sampleMimeType
         _state.update {
             it.copy(
                 current = queue.getOrNull(idx) ?: it.current,
@@ -225,6 +325,7 @@ class PlayerController(private val context: Context) {
                 queue = queue,
                 isPlaying = p.isPlaying,
                 isBuffering = p.playbackState == Player.STATE_BUFFERING,
+                ended = p.playbackState == Player.STATE_ENDED,
                 positionMs = p.currentPosition.coerceAtLeast(0),
                 durationMs = p.duration.takeIf { d -> d != C.TIME_UNSET } ?: 0,
                 bufferedMs = p.bufferedPosition,
@@ -235,10 +336,9 @@ class PlayerController(private val context: Context) {
                 videoHeight = vs.height,
                 error = if (p.playerError == null) null else it.error,
                 unsupported = p.playerError != null && it.unsupported,
-                videoUnsupported = p.currentTracks.groups.let { g ->
-                    g.any { it.type == C.TRACK_TYPE_VIDEO } && g.none { it.type == C.TRACK_TYPE_VIDEO && it.isSupported(true) }
-                    // (true: a video above the decoder's rated size, like 4K, still plays.)
-                },
+                videoDecodeFailed = p.playerError != null && it.videoDecodeFailed,
+                videoUnsupported = videoUnsupported,
+                videoMimeType = if (videoUnsupported) unsupportedMime else if (p.playerError != null) it.videoMimeType else null,
             )
         }
     }
@@ -277,6 +377,8 @@ class PlayerController(private val context: Context) {
     }
 
     private companion object {
+        /** Positions this close to the start aren't worth resuming. */
+        const val RESUME_MIN_MS = 3_000L
         val UNSUPPORTED = setOf(
             PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
             PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,

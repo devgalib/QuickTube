@@ -6,4 +6,5 @@ import org.koin.dsl.module
 val videoModule = module {
     viewModel { VideoViewModel(get(), get(), get()) }
     viewModel { ListPageViewModel(get()) }
+    viewModel { SavedVideosViewModel(get()) }
 }

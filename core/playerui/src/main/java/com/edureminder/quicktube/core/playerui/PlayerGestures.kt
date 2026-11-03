@@ -1,4 +1,4 @@
-package com.edureminder.quicktube.feature.gallery.player
+package com.edureminder.quicktube.core.playerui
 
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown

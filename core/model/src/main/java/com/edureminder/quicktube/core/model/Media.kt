@@ -41,7 +41,8 @@ data class Comment(
     val replyCount: Int = 0,
 )
 
-enum class FormatKind { AUDIO, VIDEO }
+/** IMAGE: a photo (Instagram posts and carousels). */
+enum class FormatKind { AUDIO, VIDEO, IMAGE }
 
 /** How a stream is fetched: a plain file, or an HLS (.m3u8) playlist of segments. */
 enum class StreamProtocol { HTTP, HLS }
@@ -65,6 +66,8 @@ data class DownloadOption(
     val protocol: StreamProtocol = StreamProtocol.HTTP,
     /** Download the video, then keep only its audio track (music option for any website). */
     val extractAudio: Boolean = false,
+    /** This item's own picture, when the options are a post's items rather than formats of one video. */
+    val thumbnail: String? = null,
 ) {
     val totalSize get() = if (sizeBytes < 0) -1 else sizeBytes + audioSizeBytes.coerceAtLeast(0)
 }

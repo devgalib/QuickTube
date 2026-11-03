@@ -135,14 +135,15 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
         bottomBar = {
             Column {
                 AnimatedVisibility(batchState.running || ui.loadingAll, enter = slideInVertically { it }, exit = slideOutVertically { it }) {
-                    BatchProgress(if (ui.loadingAll) null else batchState, ui.items.size)
+                    BatchProgress(if (ui.loadingAll) null else batchState, ui.items.size, aboveNavBar = !selecting)
                 }
                 AnimatedVisibility(selecting, enter = slideInVertically { it }, exit = slideOutVertically { it }) {
                     Surface(color = MaterialTheme.colorScheme.surfaceContainer, tonalElevation = 3.dp) {
                         PillButton(
                             if (selected.isEmpty()) "Select videos to download" else "Download (${selected.size})",
                             { asking = BatchScope.Selected(videos.filter { it.url in selected }) },
-                            Modifier.fillMaxWidth().padding(16.dp),
+                            // Above the system navigation bar (the bar draws behind it, edge to edge).
+                            Modifier.fillMaxWidth().navigationBarsPadding().padding(16.dp),
                             icon = QtIcons.Download,
                             enabled = selected.isNotEmpty(),
                         )
@@ -230,9 +231,9 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
 }
 
 @Composable
-private fun BatchProgress(state: BatchDownloader.State?, loaded: Int) {
+private fun BatchProgress(state: BatchDownloader.State?, loaded: Int, aboveNavBar: Boolean) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
+        Column(Modifier.fillMaxWidth().then(if (aboveNavBar) Modifier.navigationBarsPadding() else Modifier).padding(horizontal = 16.dp, vertical = 10.dp)) {
             Text(
                 if (state == null) "Getting the full list… $loaded videos"
                 else "Adding to downloads… ${state.added + state.failed} of ${state.total}",

@@ -9,7 +9,12 @@ import kotlinx.coroutines.flow.StateFlow
 /** What the sheet should show. */
 sealed interface SheetTarget {
     /** A page URL the extractor can resolve (YouTube etc.). */
-    data class Page(val url: String, val preview: MediaItem? = null) : SheetTarget
+    data class Page(
+        val url: String,
+        val preview: MediaItem? = null,
+        /** Skip the quick lookup and go straight to the page in the (invisible) browser: Instagram posts, photos too. */
+        val browserFirst: Boolean = false,
+    ) : SheetTarget
 
     /** Media found directly (browser sniffing, status saver): options are already known. */
     data class Direct(
@@ -18,6 +23,8 @@ sealed interface SheetTarget {
         val thumbnail: String?,
         val options: List<DownloadOption>,
         val headers: Map<String, String> = emptyMap(),
+        /** The options are a post's items (photos and videos), not formats of one video: pick any number of them. */
+        val items: Boolean = false,
     ) : SheetTarget
 
     /** Streams a web page loaded for the video being watched; resolved to the matching one(s) when the sheet opens. */

@@ -13,6 +13,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.edureminder.quicktube.core.model.AppSettings
 import com.edureminder.quicktube.core.model.ThemeAccent
 import com.edureminder.quicktube.core.model.ThemeMode
+import com.edureminder.quicktube.core.model.VideoEndMode
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
@@ -44,6 +45,21 @@ class SettingsDataSource(private val context: Context) {
         val playbackSpeed = floatPreferencesKey("playback_speed")
         val onboarded = booleanPreferencesKey("onboarded")
         val analytics = booleanPreferencesKey("analytics")
+        val playHistory = booleanPreferencesKey("play_history")
+        val resume = booleanPreferencesKey("resume_playback")
+        val seekStep = intPreferencesKey("seek_step")
+        val holdSpeed = floatPreferencesKey("hold_speed")
+        val gBrightness = booleanPreferencesKey("g_brightness")
+        val gVolume = booleanPreferencesKey("g_volume")
+        val gSeek = booleanPreferencesKey("g_seek")
+        val gHold = booleanPreferencesKey("g_hold")
+        val gDoubleTap = booleanPreferencesKey("g_double_tap")
+        val endMode = stringPreferencesKey("video_end_mode")
+        val keepScreenOn = booleanPreferencesKey("keep_screen_on")
+        val backgroundPlay = booleanPreferencesKey("background_play")
+        val autoPip = booleanPreferencesKey("auto_pip")
+        val autoplayNext = booleanPreferencesKey("autoplay_next")
+        val showTrending = booleanPreferencesKey("show_trending")
     }
 
     val defaultDownloadDir: String
@@ -77,6 +93,21 @@ class SettingsDataSource(private val context: Context) {
             p[K.playbackSpeed] = s.playbackSpeed
             p[K.onboarded] = s.onboarded
             p[K.analytics] = s.analyticsEnabled
+            p[K.playHistory] = s.playHistory
+            p[K.resume] = s.resumePlayback
+            p[K.seekStep] = s.seekStepSec
+            p[K.holdSpeed] = s.holdSpeed
+            p[K.gBrightness] = s.gestureBrightness
+            p[K.gVolume] = s.gestureVolume
+            p[K.gSeek] = s.gestureSeek
+            p[K.gHold] = s.gestureHoldSpeed
+            p[K.gDoubleTap] = s.gestureDoubleTap
+            p[K.endMode] = s.videoEndMode.name
+            p[K.keepScreenOn] = s.keepScreenOn
+            p[K.backgroundPlay] = s.backgroundPlay
+            p[K.autoPip] = s.autoPip
+            p[K.autoplayNext] = s.autoplayNext
+            p[K.showTrending] = s.showTrending
         }
     }
 
@@ -101,6 +132,21 @@ class SettingsDataSource(private val context: Context) {
         playbackSpeed = p[K.playbackSpeed] ?: 1f,
         onboarded = p[K.onboarded] ?: false,
         analyticsEnabled = p[K.analytics] ?: true,
+        playHistory = p[K.playHistory] ?: true,
+        resumePlayback = p[K.resume] ?: true,
+        seekStepSec = p[K.seekStep] ?: 10,
+        holdSpeed = p[K.holdSpeed] ?: 2f,
+        gestureBrightness = p[K.gBrightness] ?: true,
+        gestureVolume = p[K.gVolume] ?: true,
+        gestureSeek = p[K.gSeek] ?: true,
+        gestureHoldSpeed = p[K.gHold] ?: true,
+        gestureDoubleTap = p[K.gDoubleTap] ?: true,
+        videoEndMode = p[K.endMode]?.let { runCatching { VideoEndMode.valueOf(it) }.getOrNull() } ?: VideoEndMode.REPEAT_ONE,
+        keepScreenOn = p[K.keepScreenOn] ?: true,
+        backgroundPlay = p[K.backgroundPlay] ?: false,
+        autoPip = p[K.autoPip] ?: true,
+        autoplayNext = p[K.autoplayNext] ?: true,
+        showTrending = p[K.showTrending] ?: false,
     )
 }
 

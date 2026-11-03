@@ -116,6 +116,8 @@ fun DownloadOption.toRequest(
     pageUrl = pageUrl,
     thumbnail = thumbnail,
     quality = when {
+        // A photo has no quality to tell apart, and its file name shouldn't carry one.
+        kind == FormatKind.IMAGE -> null
         kind == FormatKind.VIDEO && height > 0 -> "${height}p"
         // Unknown height: the short label in the title, e.g. "High quality (HD)" → "HD".
         kind == FormatKind.VIDEO -> this.title.substringAfterLast('(', "").substringBefore(')').takeIf { it.isNotBlank() && it.length <= 8 } ?: "Video"

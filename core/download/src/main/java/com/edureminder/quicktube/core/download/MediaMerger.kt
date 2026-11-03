@@ -7,10 +7,8 @@ import android.os.Build
 import android.util.Log
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.container.Mp4OrientationData
 import androidx.media3.muxer.Mp4Muxer
 import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.ByteBuffer
 
@@ -28,7 +26,25 @@ object MediaMerger {
      * H.264/H.265/AV1 + AAC, WebM for VP8/VP9 + Opus/Vorbis. Returns the written file, whose extension may
      * differ from [output] when WebM was needed.
      */
-    fun merge(video: File, audio: File, output: File): File = mux(output, listOf(video to "video/", audio to "audio/"))
+    fun merge(video: File, audio: File, output: File): File {
+        // DASH MP4 parts (YouTube) merge in place, needing almost no free space even for an 8 GB video.
+        if (output.extension == "mp4" && video.absoluteFile.parentFile == output.absoluteFile.parentFile) {
+            val merged = try {
+                InPlaceMp4Merge.merge(video, audio)
+            } catch (e: Exception) {
+                // Once the parts are being consumed there's nothing left to fall back to.
+                if (InPlaceMp4Merge.marker(video).exists()) throw e
+                Log.w(TAG, "In-place merge failed: $e")
+                false
+            }
+            if (merged) {
+                val target = outputFor(output, "mp4")
+                if (!video.renameTo(target)) throw IOException("Couldn't save the merged video")
+                return target
+            }
+        }
+        return mux(output, listOf(video to "video/", audio to "audio/"))
+    }
 
     /** Copies the audio track of a media file into .m4a (AAC) or .webm (Opus/Vorbis). Returns the written file. */
     fun extractAudio(input: File, output: File): File = mux(output, listOf(input to "audio/"))
@@ -66,6 +82,12 @@ object MediaMerger {
      * the platform muxer (needed for WebM), then the platform extractor and muxer as the last resort.
      */
     private fun mux(requested: File, inputs: List<Pair<File, String>>): File {
+        // The output is about as big as the inputs; fail now rather than after filling the phone (an 8 GB video).
+        val needed = inputs.map { it.first }.distinct().sumOf { it.length() }
+        val free = requested.absoluteFile.parentFile?.usableSpace ?: Long.MAX_VALUE
+        if (inputs.any { it.second == "video/" } && free in 1 until needed + 64L * 1024 * 1024) {
+            throw IOException("Not enough storage to process the video (ENOSPC): needs ${needed shr 20} MB, ${free shr 20} MB free")
+        }
         val attempts = listOf<Pair<String, () -> File>>(
             "media3" to { muxMedia3(requested, inputs) ?: muxWith(requested, inputs) { f, p -> Media3TrackReader.open(f, p) } },
             "platform" to { muxWith(requested, inputs) { f, p -> PlatformTrackReader(f, p) } },
@@ -83,7 +105,7 @@ object MediaMerger {
         throw last!!
     }
 
-    /** Media3 extractors + Media3 Mp4Muxer. Null when the output must be WebM or a codec isn't supported there. */
+    /** Media3 extractors + [StreamingMp4Writer]. Null when the output must be WebM or a codec isn't supported there. */
     @androidx.annotation.OptIn(UnstableApi::class)
     private fun muxMedia3(requested: File, inputs: List<Pair<File, String>>): File? {
         val readers = mutableListOf<Media3TrackReader>()
@@ -97,21 +119,16 @@ object MediaMerger {
             if (!mimes.all { it in Mp4Muxer.SUPPORTED_VIDEO_SAMPLE_MIME_TYPES || it in Mp4Muxer.SUPPORTED_AUDIO_SAMPLE_MIME_TYPES }) return null
             val target = outputFor(requested, if (mimes.all { it.startsWith("audio/") }) "m4a" else "mp4")
             out = target
-            FileOutputStream(target).use { stream ->
-                val muxer = Mp4Muxer.Builder(stream).build()
-                try {
-                    val tracks = readers.map { muxer.addTrack(it.media3Format) }
-                    readers.firstOrNull { it.media3Format.sampleMimeType!!.startsWith("video/") }
-                        ?.rotation?.takeIf { it != 0 }?.let { muxer.addMetadataEntry(Mp4OrientationData(it)) }
-                    while (true) {
-                        val i = nextReader(readers) ?: break
-                        val (time, flags, data) = readers[i].readSample()
-                        val keyFrame = if (flags and C.BUFFER_FLAG_KEY_FRAME != 0) C.BUFFER_FLAG_KEY_FRAME else 0
-                        muxer.writeSampleData(tracks[i], ByteBuffer.wrap(data), androidx.media3.muxer.BufferInfo(time, data.size, keyFrame))
-                    }
-                } finally {
-                    muxer.close()
+            val rotation = readers.firstOrNull { it.media3Format.sampleMimeType!!.startsWith("video/") }?.rotation ?: 0
+            // Mp4Muxer itself keeps every sample's metadata on the heap, which runs out of memory on very long
+            // videos (47 h ≈ 13 million samples); this writer streams and spills its tables to disk.
+            StreamingMp4Writer(target, readers.map { it.media3Format }, rotation).use { writer ->
+                while (true) {
+                    val i = nextReader(readers) ?: break
+                    val (time, flags, data) = readers[i].readSample()
+                    writer.writeSample(i, time, flags and C.BUFFER_FLAG_KEY_FRAME != 0, data)
                 }
+                writer.finish()
             }
             return target
         } catch (e: Throwable) {

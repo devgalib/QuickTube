@@ -467,6 +467,7 @@ internal class DownloadEngine(
             File(p).delete()
             File("$p.idx").delete()
             ChunkState.stateFile(File(p)).delete()
+            InPlaceMp4Merge.marker(File(p)).delete()
         }
         partsDir().listFiles { f -> f.name.startsWith("task-${e.id}.") }?.forEach { it.delete() }
     }
@@ -486,6 +487,7 @@ internal class DownloadEngine(
         e is java.net.UnknownHostException -> "No internet connection"
         e is java.net.SocketTimeoutException -> "Connection timed out"
         e.message?.contains("ENOSPC") == true -> "Not enough storage"
+        e is OutOfMemoryError -> "Not enough memory to process this video"
         else -> com.edureminder.quicktube.core.common.DownloadErrors.friendly(e.message)
     }
 

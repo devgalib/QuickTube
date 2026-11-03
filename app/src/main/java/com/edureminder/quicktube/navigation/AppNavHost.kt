@@ -57,6 +57,7 @@ import com.edureminder.quicktube.feature.gallery.AlbumScreen
 import com.edureminder.quicktube.feature.gallery.GalleryScreen
 import com.edureminder.quicktube.feature.gallery.ViewerScreen
 import com.edureminder.quicktube.player.GalleryPlayerActivity
+import com.edureminder.quicktube.player.FloatingPlayerActivity
 import com.edureminder.quicktube.core.designsystem.LocalBottomBarHidden
 import com.edureminder.quicktube.core.designsystem.QtEasing
 import androidx.compose.animation.core.tween
@@ -111,7 +112,9 @@ fun AppNavHost(nav: NavHostController) {
     val playing by koinInject<com.edureminder.quicktube.core.media.PlayerController>().state.collectAsStateWithLifecycle()
     val galleryId = playing.current?.id?.takeIf { it.startsWith("gallery:") }?.removePrefix("gallery:")?.toLongOrNull()
     val galleryVideo = galleryId != null && !playing.audioOnly
-    val showMini = !galleryVideo && dest?.let { d -> !d.hasRoute(PlayerRoute::class) && !d.hasRoute(VideoRoute::class) && !d.hasRoute(GalleryViewerRoute::class) } ?: false
+    // The floating window is showing the video instead.
+    val floating by com.edureminder.quicktube.core.playerui.PipState.floating.collectAsStateWithLifecycle()
+    val showMini = !galleryVideo && !floating && dest?.let { d -> !d.hasRoute(PlayerRoute::class) && !d.hasRoute(VideoRoute::class) && !d.hasRoute(GalleryViewerRoute::class) } ?: false
     // A tab screen can swap the floating bar for its own (the gallery's selection actions).
     val barHidden = remember { mutableStateOf(false) }
     // The mini player only draws when something is loaded; nothing playing = no space kept for it.
@@ -277,6 +280,7 @@ fun AppNavHost(nav: NavHostController) {
                 val r = e.toRoute<VideoRoute>()
                 VideoScreen(r.url, previewTitle = r.title, previewThumbnail = r.thumbnail, onBack = nav::popBackStack, onOpen = ::openItem,
                     onChannel = { nav.navigate(ChannelRoute(it)) },
+                    onPip = { FloatingPlayerActivity.start(context) },
                     onPlayNext = { item -> nav.navigate(VideoRoute(item.url, item.title.ifBlank { null }, item.thumbnail)) { popUpTo<VideoRoute> { inclusive = true } } })
             }
             composable<SavedVideosRoute> { SavedVideosScreen(nav::popBackStack, onOpen = ::openItem) }
@@ -288,7 +292,7 @@ fun AppNavHost(nav: NavHostController) {
                     openStatusSaver = { nav.navigate(StatusSaverRoute) })
             }
             composable<DownloadingRoute> { DownloadingScreen(nav::popBackStack) }
-            composable<PlayerRoute> { PlayerScreen(onBack = nav::popBackStack) }
+            composable<PlayerRoute> { PlayerScreen(onBack = nav::popBackStack, onPip = { FloatingPlayerActivity.start(context) }) }
             composable<BrowserRoute> { e ->
                 val r = e.toRoute<BrowserRoute>()
                 BrowserScreen(

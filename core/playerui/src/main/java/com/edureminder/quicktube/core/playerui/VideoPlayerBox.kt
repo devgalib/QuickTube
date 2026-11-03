@@ -161,6 +161,12 @@ fun VideoPlayerBox(
     val hasPrevious = showPrevNext && state.queue.size > 1 && state.index > 0
 
     val ratio = if (state.videoWidth > 0 && state.videoHeight > 0) state.videoWidth.toFloat() / state.videoHeight else 16f / 9f
+    // The video is in the floating window: only that window draws it (one surface per player).
+    val floating by PipState.floating.collectAsStateWithLifecycle()
+    if (floating && !LocalFloatingPlayer.current) {
+        FloatingPlaceholder(state.current?.artwork, modifier)
+        return
+    }
     BoxWithConstraints(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
         if (!state.audioOnly) {
             val fitWide = maxWidth / maxHeight < ratio
@@ -257,6 +263,26 @@ fun VideoPlayerBox(
         sleepAt = sleepAt, onSleep = { sleepAt = it },
         onDismiss = { sheetOpen = false; touch() },
     )
+}
+
+/** Where the player was, while the video plays in the floating window: its picture and a way to bring it back. */
+@Composable
+private fun FloatingPlaceholder(artwork: String?, modifier: Modifier) {
+    Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
+        if (artwork != null) coil3.compose.AsyncImage(
+            artwork, null, contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize(), alpha = 0.35f,
+        )
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(QtIcons.PictureInPicture, null, tint = Color.White, modifier = Modifier.size(32.dp))
+            Text("Playing in picture-in-picture", color = Color.White, style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(top = 8.dp))
+            Text(
+                "Show here", color = Color.Black, style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.padding(top = 14.dp).clip(CircleShape).background(Color.White)
+                    .pressable(onClick = { PipState.recall.value++ }).padding(horizontal = 18.dp, vertical = 9.dp),
+            )
+        }
+    }
 }
 
 /** The player's loading ring: thin, white and round-capped on a soft shade, like YouTube's. */

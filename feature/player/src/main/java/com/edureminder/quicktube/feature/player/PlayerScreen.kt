@@ -55,12 +55,10 @@ import com.edureminder.quicktube.core.playerui.SpeedButton
 import com.edureminder.quicktube.core.playerui.VideoPlayerBox
 import com.edureminder.quicktube.core.playerui.AutoPipEffect
 import com.edureminder.quicktube.core.playerui.LocalPipMode
-import com.edureminder.quicktube.core.playerui.enterVideoPip
 import org.koin.compose.koinInject
 
 @Composable
-fun PlayerScreen(onBack: () -> Unit) {
-    val activity = androidx.activity.compose.LocalActivity.current
+fun PlayerScreen(onBack: () -> Unit, onPip: () -> Unit = {}) {
     val controller = koinInject<PlayerController>()
     val state by controller.state.collectAsStateWithLifecycle()
     var fullscreen by rememberSaveable { mutableStateOf(false) }
@@ -72,7 +70,7 @@ fun PlayerScreen(onBack: () -> Unit) {
     AutoPipEffect(controller, state)
     // Back just leaves; only the picture-in-picture button sends the video to the floating window.
     fun leave(toPip: Boolean = false) {
-        if (toPip) { activity?.enterVideoPip(state); return }
+        if (toPip) { onPip(); return }
         onBack()
     }
     BackHandler(!fullscreen) { leave() }

@@ -147,7 +147,9 @@ class VideoViewModel(
 
     override fun onCleared() {
         val d = (details.value as? LoadState.Success)?.data
-        if (!backgroundMode && d != null && player.state.value.current?.id == "web:" + d.item.url) player.stop()
+        // Not while it plays in the floating window: closing this page shouldn't close that.
+        if (!backgroundMode && !com.edureminder.quicktube.core.playerui.PipState.floating.value && d != null &&
+            player.state.value.current?.id == "web:" + d.item.url) player.stop()
         super.onCleared()
     }
 }

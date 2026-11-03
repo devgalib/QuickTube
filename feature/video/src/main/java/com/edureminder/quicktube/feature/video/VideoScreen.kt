@@ -63,7 +63,6 @@ import com.edureminder.quicktube.core.playerui.UpNext
 import kotlinx.coroutines.launch
 import com.edureminder.quicktube.core.playerui.AutoPipEffect
 import com.edureminder.quicktube.core.playerui.LocalPipMode
-import com.edureminder.quicktube.core.playerui.enterVideoPip
 import com.edureminder.quicktube.core.playerui.VideoPlayerBox
 import com.edureminder.quicktube.core.ui.Avatar
 import com.edureminder.quicktube.core.ui.ErrorBox
@@ -87,6 +86,8 @@ fun VideoScreen(
     onBack: () -> Unit,
     onOpen: (MediaItem) -> Unit,
     onChannel: (String) -> Unit,
+    /** The player's picture-in-picture button: the video goes on in the floating window. */
+    onPip: () -> Unit = {},
     /** Plays another video in place of this one (Next, autoplay). */
     onPlayNext: (MediaItem) -> Unit = onOpen,
 ) {
@@ -103,11 +104,10 @@ fun VideoScreen(
     FullscreenEffect(fullscreen && !LocalPipMode.current)
     BackHandler(fullscreen) { fullscreen = false }
     val saved by vm.savedFlow.collectAsStateWithLifecycle()
-    val activity = androidx.activity.compose.LocalActivity.current
     if (details is LoadState.Success) AutoPipEffect(vm.player, playback)
     // Back closes the video; only the picture-in-picture button sends it to the floating window.
     fun leave(toPip: Boolean = false) {
-        if (toPip) { activity?.enterVideoPip(playback); return }
+        if (toPip) { onPip(); return }
         onBack()
     }
     BackHandler(!fullscreen) { leave() }

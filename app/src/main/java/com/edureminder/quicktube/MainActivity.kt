@@ -13,15 +13,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
-import androidx.lifecycle.lifecycleScope
-import com.edureminder.quicktube.core.playerui.LocalPipMode
 import com.edureminder.quicktube.core.playerui.PipState
-import com.edureminder.quicktube.core.playerui.pipParams
-import com.edureminder.quicktube.core.playerui.registerPipActions
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -41,6 +33,9 @@ import com.edureminder.quicktube.core.navigation.PlayerRoute
 import com.edureminder.quicktube.core.update.UpdateManager
 import com.edureminder.quicktube.core.update.UpdatePrompt
 import com.edureminder.quicktube.navigation.AppNavHost
+import com.edureminder.quicktube.player.FloatingPlayerActivity
+import com.edureminder.quicktube.core.navigation.VideoRoute
+import androidx.navigation.NavDestination.Companion.hasRoute
 import com.edureminder.quicktube.navigation.UrlRouter
 import com.edureminder.quicktube.ui.AppTheme
 import com.edureminder.quicktube.ui.isDark
@@ -53,13 +48,6 @@ class MainActivity : ComponentActivity() {
     private val player: PlayerController by inject()
     private val updates: UpdateManager by inject()
     private var pendingIntent by mutableStateOf<Intent?>(null)
-    private var inPip by mutableStateOf(false)
-    private var pipReceiver: android.content.BroadcastReceiver? = null
-    private val pipListener = androidx.core.util.Consumer<androidx.core.app.PictureInPictureModeChangedInfo> {
-        inPip = it.isInPictureInPictureMode
-        // Closed (dragged to ✕ or the window's close button): Android stops the activity first, then ends PiP.
-        if (!it.isInPictureInPictureMode && lifecycle.currentState == androidx.lifecycle.Lifecycle.State.CREATED) player.pause()
-    }
 
     private val permissionLauncher = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {}
 
@@ -68,18 +56,6 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         requestStartupPermissions()
         player.connect()
-        // A video screen that's playing asks for picture-in-picture when the user leaves the app (Settings → Player).
-        pipReceiver = registerPipActions(this, player)
-        addOnPictureInPictureModeChangedListener(pipListener)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) lifecycleScope.launch {
-            combine(PipState.wanted, PipState.ratio, player.state.map { it.isPlaying }) { want, ratio, playing -> Triple(want, ratio, playing) }
-                .distinctUntilChanged()
-                .collect { (want, ratio, playing) ->
-                    // Never while the window is being closed (dragged to ✕): a new layout mid-animation leaves it stuck.
-                    if (isInPictureInPictureMode && !lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED)) return@collect
-                    runCatching { setPictureInPictureParams(pipParams(this@MainActivity, ratio, playing, autoEnter = want)) }
-                }
-        }
         // Look for a new GitHub release (throttled; release builds only unless the URL was overridden for testing).
         if (savedInstanceState == null) {
             updates.cleanUpInstalledUpdates()
@@ -93,22 +69,26 @@ class MainActivity : ComponentActivity() {
             val s by settings.settings.collectAsStateWithLifecycle(AppSettings())
             val nav = rememberNavController()
             val dark = s.isDark()
-            // Again after picture-in-picture and rotation too (full-screen video): both reset the bars' style.
+            // Again after rotation too (full-screen video): it resets the bars' style.
             val orientation = androidx.compose.ui.platform.LocalConfiguration.current.orientation
-            DisposableEffect(dark, inPip, orientation) {
+            DisposableEffect(dark, orientation) {
                 val style = SystemBarStyle.auto(Color.TRANSPARENT, Color.TRANSPARENT) { dark }
                 enableEdgeToEdge(statusBarStyle = style, navigationBarStyle = style)
                 onDispose {}
             }
             AppTheme(s) {
-                CompositionLocalProvider(LocalPipMode provides inPip) {
-                    AppNavHost(nav)
-                    if (!inPip) UpdatePrompt()
-                }
+                AppNavHost(nav)
+                UpdatePrompt()
             }
             LaunchedEffect(pendingIntent) {
                 val i = pendingIntent ?: return@LaunchedEffect
                 pendingIntent = null
+                // Expanded from the floating window: the video's page if it's still open, else the full player.
+                if (i.getStringExtra("open") == "expand") {
+                    val d = nav.currentDestination
+                    if (d?.hasRoute(VideoRoute::class) != true && d?.hasRoute(PlayerRoute::class) != true) nav.navigate(PlayerRoute) { launchSingleTop = true }
+                    return@LaunchedEffect
+                }
                 handleIntent(i) { route -> nav.navigate(route) { launchSingleTop = true } }
             }
         }
@@ -116,22 +96,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        // Android 12+ enters on its own (auto-enter); older versions need asking.
-        if (Build.VERSION.SDK_INT in Build.VERSION_CODES.O until Build.VERSION_CODES.S && PipState.wanted.value) {
-            runCatching { enterPictureInPictureMode(pipParams(this, PipState.ratio.value, true, autoEnter = false)) }
-        }
+        // Leaving the app from a playing video (Settings → Player → Picture-in-picture): it goes on in the floating
+        // window, a task of its own, so opening QuickTube again doesn't close it.
+        if (PipState.wanted.value && !PipState.floating.value) FloatingPlayerActivity.start(this)
     }
 
     override fun onStop() {
         super.onStop()
         // Left the app from a video without picture-in-picture: pause it unless Settings → Player → Background play is on.
-        if (!isInPictureInPictureMode && !isChangingConfigurations && PipState.videoOnScreen.value && !player.prefs.backgroundPlay) player.pause()
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        removeOnPictureInPictureModeChangedListener(pipListener)
-        pipReceiver?.let(::unregisterReceiver)
+        if (!isChangingConfigurations && !PipState.floating.value && PipState.videoOnScreen.value && !player.prefs.backgroundPlay) player.pause()
     }
 
     override fun onNewIntent(intent: Intent) {

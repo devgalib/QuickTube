@@ -1,6 +1,5 @@
 package com.edureminder.quicktube.core.playerui
 
-import android.app.Activity
 import android.app.PendingIntent
 import android.app.PictureInPictureParams
 import android.app.RemoteAction
@@ -29,17 +28,14 @@ object PipState {
     val videoOnScreen = MutableStateFlow(false)
     /** That video's width / height, 0 when unknown. */
     val ratio = MutableStateFlow(0f)
+    /** The floating player (its own activity, in picture-in-picture) is showing the video; the app shows a placeholder. */
+    val floating = MutableStateFlow(false)
+    /** Bumped to bring the video back from the floating window into the app (the window closes, playback goes on). */
+    val recall = MutableStateFlow(0)
 }
 
-/**
- * The player's picture-in-picture button: shrinks this activity (with the video screen as it is) into the floating
- * window in one animation; nothing reloads, and expanding it comes back to the same screen.
- */
-fun Activity.enterVideoPip(state: PlaybackState) {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
-    val ok = runCatching { enterPictureInPictureMode(pipParams(this, state.videoRatio(), state.isPlaying, autoEnter = false)) }.getOrDefault(false)
-    if (!ok) android.widget.Toast.makeText(this, "Picture-in-picture isn't available", android.widget.Toast.LENGTH_SHORT).show()
-}
+/** True inside the floating player itself: the one place that draws the video while [PipState.floating]. */
+val LocalFloatingPlayer = compositionLocalOf { false }
 
 /** True while the hosting activity is in picture-in-picture: player screens then draw only the video. */
 val LocalPipMode = compositionLocalOf { false }

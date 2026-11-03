@@ -59,8 +59,24 @@ class NewPipeMediaExtractor(
         NewPipe.setupLocalization(Localization(language, country), ContentCountry(country))
     }
 
-    private fun serviceFor(url: String): StreamingService =
-        runCatching { NewPipe.getServiceByUrl(url) }.getOrDefault(yt)
+    private fun serviceFor(url: String): StreamingService = serviceByHost(url) ?: yt
+
+    /**
+     * The service for a native site, chosen by the link's host. NewPipe's own lookup tries every service in turn, and
+     * Bandcamp's check fetches the page over the network (custom artist domains): on the main thread that froze the
+     * app (an ANR) for links YouTube's handler didn't recognise.
+     */
+    private fun serviceByHost(url: String): StreamingService? {
+        val host = com.edureminder.quicktube.core.common.Urls.host(url) ?: return null
+        fun on(domain: String) = host == domain || host.endsWith(".$domain")
+        return when {
+            on("youtube.com") || on("youtu.be") -> yt
+            on("soundcloud.com") -> ServiceList.SoundCloud
+            on("bandcamp.com") -> ServiceList.Bandcamp
+            on("media.ccc.de") -> ServiceList.MediaCCC
+            else -> null
+        }
+    }
 
     /**
      * Only sites with a real native page. (NewPipe's PeerTube handler matches any "/videos/" URL on any domain,
@@ -71,11 +87,12 @@ class NewPipeMediaExtractor(
         return NATIVE_HOSTS.any { host == it || host.endsWith(".$it") }
     }
 
-    override fun canHandle(url: String): Boolean = isNativeHost(url) && runCatching { NewPipe.getServiceByUrl(url); true }.getOrDefault(false)
+    override fun canHandle(url: String): Boolean = isNativeHost(url) &&
+        runCatching { serviceByHost(url)?.getLinkTypeByUrl(url).let { it != null && it != StreamingService.LinkType.NONE } }.getOrDefault(false)
 
     override fun linkKind(url: String): ItemKind? = if (com.edureminder.quicktube.core.common.Urls.youtubeVideoId(url) != null) ItemKind.VIDEO
     else if (!isNativeHost(url)) null else runCatching {
-        when (NewPipe.getServiceByUrl(url).getLinkTypeByUrl(url)) {
+        when (serviceByHost(url)?.getLinkTypeByUrl(url)) {
             StreamingService.LinkType.STREAM -> ItemKind.VIDEO
             StreamingService.LinkType.CHANNEL -> ItemKind.CHANNEL
             StreamingService.LinkType.PLAYLIST -> ItemKind.PLAYLIST

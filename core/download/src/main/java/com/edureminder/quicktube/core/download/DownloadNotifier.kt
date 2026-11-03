@@ -43,6 +43,9 @@ internal class DownloadNotifier(
         }
     }
 
+    /** The service couldn't go foreground and stopped; the next download tries to start it again. */
+    fun serviceStopped() { serviceRunning = false }
+
     /** Starts/stops the foreground service and redraws the progress notification. */
     fun refresh(hasWork: Boolean) {
         val now = System.currentTimeMillis()
@@ -51,6 +54,7 @@ internal class DownloadNotifier(
         if (hasWork && !serviceRunning) {
             // Android 12+ refuses foreground-service starts while the app is in the background;
             // downloads keep running in-process and the service starts next time we're allowed.
+            DownloadService.startRequested()
             serviceRunning = runCatching {
                 ContextCompat.startForegroundService(context, Intent(context, DownloadService::class.java))
             }.isSuccess
@@ -58,8 +62,9 @@ internal class DownloadNotifier(
         scope.launch {
             val running = dao.byStatus(listOf(DownloadStatus.RUNNING, DownloadStatus.MERGING, DownloadStatus.QUEUED))
             if (running.isEmpty() && !hasWork) {
+                // Never stopService(): a stop that lands before the service went foreground crashes the app.
+                if (serviceRunning) DownloadService.requestStop()
                 serviceRunning = false
-                context.stopService(Intent(context, DownloadService::class.java))
                 nm.cancel(ID_PROGRESS)
                 return@launch
             }

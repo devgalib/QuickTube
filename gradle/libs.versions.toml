@@ -1,7 +1,7 @@
 [versions]
 agp = "9.3.3"
-kotlin = "2.4.10"
-ksp = "2.3.12"
+kotlin = "2.4.21"
+ksp = "2.3.13"
 coreKtx = "1.19.1"
 junit = "4.13.2"
 junitVersion = "1.3.0"
@@ -19,7 +19,7 @@ koin = "4.2.2"
 coil = "3.6.3"
 okhttp = "5.5.1"
 serialization = "1.12.0"
-coroutines = "1.10.2"
+coroutines = "1.11.0"
 media3 = "1.11.1"
 # Prebuilt FFmpeg audio decoders (AC-3, E-AC-3, DTS, TrueHD, WMA…) for Media3, by Jellyfin.
 media3Ffmpeg = "1.9.0+1"

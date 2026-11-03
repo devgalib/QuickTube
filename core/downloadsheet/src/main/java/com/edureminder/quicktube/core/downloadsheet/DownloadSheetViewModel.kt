@@ -33,6 +33,8 @@ data class SheetUi(
     val report: List<String> = emptyList(),
     /** [options] are a post's photos and videos (each one downloadable), not formats of one video. */
     val items: Boolean = false,
+    /** A part of the video can be downloaded instead of all of it (YouTube videos). */
+    val cuttable: Boolean = false,
 )
 
 class DownloadSheetViewModel(
@@ -135,6 +137,7 @@ class DownloadSheetViewModel(
                             loading = false, title = d.item.title, thumbnail = d.item.thumbnail, durationSec = d.item.durationSec,
                             pageUrl = d.item.url, options = d.options, isLive = d.item.isLive,
                             error = if (d.item.isLive) "Live streams can't be downloaded until they end." else null,
+                            cuttable = !d.item.isLive && d.item.durationSec > 1,
                         )
                         }
                     } catch (e: Throwable) {
@@ -203,7 +206,8 @@ class DownloadSheetViewModel(
         }
     }
 
-    fun download(option: DownloadOption) {
+    /** [clip]: only this part of the video (ms), or null for all of it. */
+    fun download(option: DownloadOption, clip: LongRange? = null) {
         val s = _ui.value
         analytics.event(
             com.edureminder.quicktube.core.analytics.Events.DOWNLOAD_STARTED,
@@ -211,6 +215,41 @@ class DownloadSheetViewModel(
         )
         // Not viewModelScope: the share sheet's activity finishes the moment a format is tapped, which would
         // cancel the request before it's saved.
-        downloads.submit(option.toRequest(s.title, s.pageUrl, s.thumbnail, s.durationSec, s.headers))
+        val request = option.toRequest(s.title, s.pageUrl, s.thumbnail, s.durationSec, s.headers)
+        downloads.submit(if (clip == null) request else clipRequest(request, option, clip, s.durationSec))
     }
+}
+
+/** "1:23" / "1:02:03". */
+internal fun clipTime(ms: Long): String {
+    val t = ms.coerceAtLeast(0) / 1000
+    val h = t / 3600; val m = (t % 3600) / 60; val sec = t % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, sec) else "%d:%02d".format(m, sec)
+}
+
+/** "83", "1:23", "1:02:03" → milliseconds; null when it isn't a time. */
+internal fun parseClipTime(text: String): Long? {
+    val parts = text.trim().split(':', '.').map { it.trim() }
+    if (parts.isEmpty() || parts.size > 3 || parts.any { it.isEmpty() || it.any { c -> !c.isDigit() } || it.length > 4 }) return null
+    return parts.fold(0L) { acc, p -> acc * 60 + p.toLong() } * 1000
+}
+
+/**
+ * The request for a cut: its own file name ("Title (cut 1m23s-4m56s)"), the clip's duration, and sizes scaled to the
+ * part being downloaded (the download progress uses them).
+ */
+internal fun clipRequest(request: DownloadRequest, option: DownloadOption, clip: LongRange, durationSec: Long): DownloadRequest {
+    fun label(ms: Long): String {
+        val t = ms / 1000
+        val h = t / 3600; val m = (t % 3600) / 60; val sec = t % 60
+        return (if (h > 0) "${h}h" else "") + (if (h > 0 || m > 0) "${m}m" else "") + "${sec}s"
+    }
+    val share = if (durationSec > 0) ((clip.last - clip.first) / 1000.0 / durationSec).coerceIn(0.0, 1.0) else 1.0
+    fun scaled(n: Long) = if (n > 0) (n * share).toLong().coerceAtLeast(1) else n
+    return request.copy(
+        title = "${request.title} (cut ${label(clip.first)}-${label(clip.last)})",
+        clipStartMs = clip.first, clipEndMs = clip.last,
+        durationSec = ((clip.last - clip.first) / 1000).coerceAtLeast(1),
+        sizeBytes = scaled(option.sizeBytes), audioSizeBytes = scaled(option.audioSizeBytes),
+    )
 }

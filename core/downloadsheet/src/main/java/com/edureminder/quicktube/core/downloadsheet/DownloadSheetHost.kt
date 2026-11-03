@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -83,6 +84,9 @@ fun DownloadSheetHost(
     val context = LocalContext.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var showAll by remember(t) { mutableStateOf(false) }
+    // Optional cut (YouTube): the part of the video to download, in ms; null = all of it.
+    var cut by remember(t) { mutableStateOf<LongRange?>(null) }
+    val durationMs = ui.durationSec * 1000
     var deepSearching by remember(t) { mutableStateOf(t is SheetTarget.Page && t.browserFirst && onDeepSearch != null) }
     val notFound = !ui.loading && ui.options.isEmpty() && ui.error != null && !ui.isLive && t is SheetTarget.Page
     LaunchedEffect(t, notFound) {
@@ -100,7 +104,7 @@ fun DownloadSheetHost(
         val o = pending ?: return@rememberLauncherForActivityResult
         pending = null
         if (result.values.all { it }) {
-            vm.download(o)
+            vm.download(o, cut)
             Toast.makeText(context, "Added to downloads", Toast.LENGTH_SHORT).show()
             controller.dismiss()
             onDownloadStarted()
@@ -113,7 +117,7 @@ fun DownloadSheetHost(
             storageLauncher.launch(Permissions.storageWrite)
             return@start
         }
-        vm.download(o)
+        vm.download(o, cut)
         Toast.makeText(context, "Added to downloads", Toast.LENGTH_SHORT).show()
         controller.dismiss()
         onDownloadStarted()
@@ -123,7 +127,8 @@ fun DownloadSheetHost(
     var duplicate by remember(t) { mutableStateOf<Pair<com.edureminder.quicktube.core.model.DownloadTask, DownloadOption>?>(null) }
     val startDownload = { o: DownloadOption ->
         scope.launch {
-            val existing = vm.existing(o)
+            // A cut is its own file: no "already downloaded" question.
+            val existing = if (cut != null) null else vm.existing(o)
             if (existing != null) duplicate = existing to o else downloadNow(o)
         }
         Unit
@@ -138,7 +143,9 @@ fun DownloadSheetHost(
     }
     // A sensible choice is ready: ~720p video (or the best below it), else the first format.
     var selectedId by remember(t) { mutableStateOf<String?>(null) }
-    val selected = ui.options.firstOrNull { it.id == selectedId } ?: defaultChoice(ui.options)
+    val cuttableOptions = ui.options.filter { it.protocol == com.edureminder.quicktube.core.model.StreamProtocol.HTTP && !it.extractAudio }
+    val choices = if (cut != null) cuttableOptions else ui.options
+    val selected = choices.firstOrNull { it.id == selectedId } ?: defaultChoice(choices)
     // A post's photos and videos: all of them ticked to start with.
     var picked by remember(t, ui.options) { mutableStateOf(ui.options.map { it.id }.toSet()) }
     val downloadPicked = start@{
@@ -162,7 +169,10 @@ fun DownloadSheetHost(
                                 modifier = Modifier.padding(start = 4.dp))
                         }
                     } else if (!ui.loading && !deepSearching) {
-                        Header(ui)
+                        Header(ui, onCut = if (ui.cuttable && ui.options.isNotEmpty() && durationMs > 0) ({
+                            cut = if (cut == null) 0L..durationMs else null
+                        }) else null, cutting = cut != null)
+                        cut?.let { c -> CutPanel(c, durationMs, onChange = { cut = it }, onClose = { cut = null }) }
                     }
                     when {
                         ui.loading -> SheetSkeleton(null)
@@ -184,7 +194,8 @@ fun DownloadSheetHost(
                             }
                         }
                         else -> {
-                            val list = if (all) ordered(ui.options) else quickPicks(ui.options)
+                            // A cut needs plain files (no HLS, no "audio from video").
+                            val list = if (all) ordered(choices) else quickPicks(choices)
                             LazyColumn(Modifier.heightIn(max = if (all) 470.dp else 380.dp)) {
                                 val audio = list.filter { it.kind == FormatKind.AUDIO }
                                 val video = list.filter { it.kind == FormatKind.VIDEO }
@@ -196,7 +207,7 @@ fun DownloadSheetHost(
                                     item { SectionLabel("Video") }
                                     items(video, key = { it.id }) { OptionRow(it, all, it.id == selected?.id) { selectedId = it.id } }
                                 }
-                                if (!all && ui.options.size > list.size) item {
+                                if (!all && choices.size > list.size) item {
                                     Row(
                                         Modifier.fillMaxWidth().padding(top = 4.dp).pressable(scaleDown = 0.99f, onClick = { showAll = true })
                                             .padding(horizontal = 20.dp, vertical = 12.dp),
@@ -204,7 +215,7 @@ fun DownloadSheetHost(
                                     ) {
                                         Text("More formats", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium,
                                             modifier = Modifier.weight(1f))
-                                        Text("All ${ui.options.size}", style = MaterialTheme.typography.labelMedium,
+                                        Text("All ${choices.size}", style = MaterialTheme.typography.labelMedium,
                                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                                         Icon(QtIcons.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
                                     }
@@ -228,8 +239,12 @@ fun DownloadSheetHost(
                 )
             } else if (!ui.loading && !deepSearching && selected != null) {
                 val size = selected.shownSize()
+                val c = cut
+                val shown = if (c != null && durationMs > 0 && size > 0) (size * ((c.last - c.first).toDouble() / durationMs)).toLong() else size
                 PillButton(
-                    "Download · " + shortName(selected) + (if (size > 0) " · " + Format.bytes(size) else ""),
+                    // The cut's times are in the panel above; the button only says it's a cut.
+                    (if (c != null) "Download cut · " else "Download · ") + shortName(selected) +
+                        (if (shown > 0) " · " + (if (c != null) "~" else "") + Format.bytes(shown) else ""),
                     { startDownload(selected) },
                     Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 10.dp),
                     icon = QtIcons.Download,
@@ -343,8 +358,8 @@ private fun TechDetails(report: List<String>) {
 }
 
 @Composable
-private fun Header(ui: SheetUi) {
-    Row(Modifier.padding(start = 20.dp, end = 20.dp, top = 2.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun Header(ui: SheetUi, onCut: (() -> Unit)? = null, cutting: Boolean = false) {
+    Row(Modifier.padding(start = 20.dp, end = if (onCut != null) 8.dp else 20.dp, top = 2.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
         Thumbnail(ui.thumbnail, Modifier.width(104.dp).aspectRatio(16f / 9f), corner = 12) { CornerLabel(Format.duration(ui.durationSec)) }
         Column(Modifier.padding(start = 14.dp).weight(1f)) {
             Text(ui.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 2,
@@ -356,6 +371,13 @@ private fun Header(ui: SheetUi) {
                 }
             }
         }
+        // Small and quiet on purpose: cutting is an extra, not the main action.
+        if (onCut != null) QtIconButton(
+            QtIcons.ContentCut, if (cutting) "Download the whole video" else "Cut: download only a part",
+            onCut, tint = if (cutting) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            container = if (cutting) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent,
+            size = 40.dp, iconSize = 20.dp, modifier = Modifier.padding(start = 4.dp),
+        )
     }
 }
 
@@ -479,4 +501,62 @@ private fun AlreadyDownloadedDialog(
             }
         }
     }
+}
+
+/**
+ * Choosing the part of the video to download: a range slider over the whole video, and the start and end as times that
+ * can be typed exactly (1:23, 1:02:03).
+ */
+@Composable
+private fun CutPanel(range: LongRange, durationMs: Long, onChange: (LongRange) -> Unit, onClose: () -> Unit) {
+    val minLen = minOf(1000L, durationMs)
+    Column(
+        Modifier.padding(horizontal = 20.dp, vertical = 4.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(QtIcons.ContentCut, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+            Text("Cut · ${clipTime(range.last - range.first)}", style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.weight(1f).padding(start = 8.dp))
+            QtIconButton(QtIcons.Close, "Cancel cut", onClose, size = 36.dp, iconSize = 18.dp, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        androidx.compose.material3.RangeSlider(
+            value = range.first.toFloat()..range.last.toFloat(),
+            onValueChange = { v ->
+                val a = v.start.toLong().coerceIn(0, durationMs - minLen)
+                val b = v.endInclusive.toLong().coerceIn(a + minLen, durationMs)
+                onChange(a..b)
+            },
+            valueRange = 0f..durationMs.toFloat(),
+            modifier = Modifier.padding(end = 8.dp),
+        )
+        Row(Modifier.padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            TimeField("Start", range.first, Modifier.weight(1f)) { ms -> onChange(ms.coerceIn(0, range.last - minLen)..range.last) }
+            Text("–", modifier = Modifier.padding(horizontal = 10.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TimeField("End", range.last, Modifier.weight(1f)) { ms -> onChange(range.first..ms.coerceIn(range.first + minLen, durationMs)) }
+        }
+    }
+}
+
+/** A time the user can type ("1:23"); applied when it's a valid time, reset to [ms] when left invalid. */
+@Composable
+private fun TimeField(label: String, ms: Long, modifier: Modifier, onSet: (Long) -> Unit) {
+    var text by remember { mutableStateOf(clipTime(ms)) }
+    var editing by remember { mutableStateOf(false) }
+    LaunchedEffect(ms) { if (!editing) text = clipTime(ms) }
+    androidx.compose.material3.OutlinedTextField(
+        value = text,
+        onValueChange = { v ->
+            text = v.filter { it.isDigit() || it == ':' }.take(9)
+            parseClipTime(text)?.let(onSet)
+        },
+        label = { Text(label) },
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyMedium,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+        modifier = modifier.onFocusChanged { f ->
+            editing = f.isFocused
+            if (!f.isFocused) text = clipTime(ms)
+        },
+    )
 }

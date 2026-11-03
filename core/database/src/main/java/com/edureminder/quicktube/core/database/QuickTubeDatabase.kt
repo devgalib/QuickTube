@@ -13,7 +13,7 @@ import org.koin.dsl.module
         DownloadEntity::class, SiteEntity::class, HistoryEntity::class, BookmarkEntity::class, SearchQueryEntity::class,
         DeletedHistoryEntity::class, PlayHistoryEntity::class, SavedVideoEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class QuickTubeDatabase : RoomDatabase() {
@@ -69,10 +69,18 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+/** v6: downloads of a part of a video (cut). */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE downloads ADD COLUMN clipStartMs INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE downloads ADD COLUMN clipEndMs INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 val databaseModule = module {
     single {
         Room.databaseBuilder(androidContext(), QuickTubeDatabase::class.java, "quicktube.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
             .fallbackToDestructiveMigrationOnDowngrade(true)
             .build()
     }

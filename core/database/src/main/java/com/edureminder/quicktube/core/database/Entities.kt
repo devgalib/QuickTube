@@ -40,18 +40,22 @@ data class DownloadEntity(
     val headers: String? = null,
     @ColumnInfo(defaultValue = "HTTP") val protocol: StreamProtocol = StreamProtocol.HTTP,
     @ColumnInfo(defaultValue = "0") val extractAudio: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val clipStartMs: Long = 0,
+    @ColumnInfo(defaultValue = "0") val clipEndMs: Long = 0,
 )
 
 fun DownloadEntity.asModel() = DownloadTask(
     id, title, pageUrl, sourceHost, thumbnail, url, audioUrl, filePath, mimeType, type, quality,
     totalBytes, downloadedBytes, audioTotalBytes, audioDownloadedBytes, status, error, durationSec,
     createdAt, completedAt, inVault, deletedAt, lastPlayedPositionMs, protocol = protocol,
+    clipStartMs = clipStartMs, clipEndMs = clipEndMs,
 )
 
 fun DownloadTask.asEntity(headers: String? = null) = DownloadEntity(
     id, title, pageUrl, sourceHost, thumbnail, url, audioUrl, filePath, mimeType, type, quality,
     totalBytes, downloadedBytes, audioTotalBytes, audioDownloadedBytes, status, error, durationSec,
     createdAt, completedAt, inVault, deletedAt, lastPlayedPositionMs, headers, protocol,
+    clipStartMs = clipStartMs, clipEndMs = clipEndMs,
 )
 
 @Entity(tableName = "sites")

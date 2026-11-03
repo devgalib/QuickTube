@@ -189,6 +189,8 @@ internal class DownloadEngine(
                 headers = headers,
                 protocol = request.protocol,
                 extractAudio = request.extractAudio,
+                clipStartMs = request.clipStartMs,
+                clipEndMs = request.clipEndMs,
             ),
         )
         reschedule()
@@ -293,7 +295,7 @@ internal class DownloadEngine(
         try {
             val target = File(entity.filePath)
             target.parentFile?.mkdirs()
-            val saved = try {
+            val saved = if (entity.clipEndMs > entity.clipStartMs && entity.protocol == StreamProtocol.HTTP) clip(id, target) else try {
                 val base = partBase(entity)
                 entity = download(id, File("$base.part"), File("$base.audio.part"))
                 finish(entity, target, base)
@@ -338,6 +340,49 @@ internal class DownloadEngine(
             jobs.remove(id)
             _speeds.update { it - id }
             reschedule()
+        }
+    }
+
+    /**
+     * A cut of the video ([ClipDownload]): fetches only that part of the streams and writes the clip straight away.
+     * Expired links are refreshed once; a format that can't be stored is swapped for a compatible one once.
+     */
+    private suspend fun clip(id: Long, target: File): File {
+        var refreshed = false
+        var swapped = false
+        while (true) {
+            val e = dao.get(id) ?: throw CancellationException("Removed")
+            val audioOnly = e.mimeType.startsWith("audio/")
+            val work = File(partsDir(), "task-$id.clip.${if (audioOnly) "m4a" else "mp4"}")
+            val progress = TaskProgress(0, 0, e.totalBytes, e.audioTotalBytes)
+            val headers = headersOf(e)
+            val ticker = scope.launch { while (isActive) { delay(500); publish(id, progress) } }
+            try {
+                withContext(netDispatcher) {
+                    ClipDownload(http, { url, range -> request(url, headers, range) }, e.clipStartMs * 1000, e.clipEndMs * 1000)
+                        .run(e.url, e.audioUrl, audioOnly, work, progress.video, progress.audio) { n -> progress.meter.add(n) }
+                }
+                if (!currentCoroutineContext().isActive) { work.delete(); throw CancellationException("Stopped") }
+                val out = publishFile(work, target)
+                dao.get(id)?.let {
+                    val mime = if (out.extension == "m4a") "audio/mp4" else "video/mp4"
+                    dao.update(it.copy(filePath = out.absolutePath, mimeType = mime, type = ContentType.fromMime(mime)))
+                }
+                return out
+            } catch (ex: HttpStatusException) {
+                work.delete()
+                if (ex.code != 403 && ex.code != 410 || refreshed) throw ex
+                refreshed = true
+                refreshUrls(e, compatibleOnly = false) ?: throw ex
+            } catch (ex: UnsupportedCodecException) {
+                work.delete()
+                if (swapped) throw ex
+                swapped = true
+                refreshUrls(e, compatibleOnly = true) ?: throw ex
+            } finally {
+                ticker.cancel()
+                publish(id, progress)
+            }
         }
     }
 

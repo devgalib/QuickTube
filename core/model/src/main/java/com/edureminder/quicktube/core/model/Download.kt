@@ -42,7 +42,11 @@ data class DownloadTask(
     val lastPlayedPositionMs: Long = 0,
     val speedBps: Long = 0,
     val protocol: StreamProtocol = StreamProtocol.HTTP,
+    /** A cut of the video: only [clipStartMs] to [clipEndMs] is downloaded. 0 / 0 = the whole video. */
+    val clipStartMs: Long = 0,
+    val clipEndMs: Long = 0,
 ) {
+    val isClip get() = clipEndMs > clipStartMs
     val progress: Float
         get() {
             val total = totalBytes + audioTotalBytes.coerceAtLeast(0)
@@ -67,6 +71,9 @@ data class DownloadRequest(
     val headers: Map<String, String> = emptyMap(),
     val protocol: StreamProtocol = StreamProtocol.HTTP,
     val extractAudio: Boolean = false,
+    /** Download only this part of the video (both 0 = all of it). */
+    val clipStartMs: Long = 0,
+    val clipEndMs: Long = 0,
 )
 
 /** A download the user deleted permanently; kept so it can be downloaded again. */

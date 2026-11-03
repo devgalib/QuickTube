@@ -22,6 +22,11 @@ internal class StreamingMp4Writer(
     output: File,
     formats: List<Format>,
     rotation: Int,
+    /**
+     * A cut ([ClipDownload]): sample times are relative to the cut's start, video may begin at a keyframe before it
+     * (negative times), and each track's edit list starts playback at 0 and lasts at most this long. 0 = no cut.
+     */
+    private val clipDurationUs: Long = 0,
 ) : Closeable {
 
     private val fileStream = FileOutputStream(output)
@@ -30,7 +35,7 @@ internal class StreamingMp4Writer(
     private val mdatStart: Long
     private val tracks = run {
         Mp4Moov.clearTemp()
-        formats.mapIndexed { i, f -> TrackState(i + 1, f, rotation) }
+        formats.mapIndexed { i, f -> TrackState(i + 1, f, rotation, clipDurationUs) }
     }
 
     init {
@@ -81,7 +86,7 @@ internal class StreamingMp4Writer(
     }
 
     /** One track's buffered chunk and reorder window. */
-    private class TrackState(id: Int, val format: Format, rotation: Int) {
+    private class TrackState(id: Int, val format: Format, rotation: Int, private val clipDurationUs: Long) {
         private val isVideo = MimeTypes.isVideo(format.sampleMimeType)
         val mp4 = Mp4Track(
             id, isVideo,
@@ -123,7 +128,13 @@ internal class StreamingMp4Writer(
             while (sorted.isNotEmpty()) emit()
             // The last sample lasts as long as the one before it.
             if (mp4.sampleCount > 0) mp4.duration(lastDelta)
-            if (firstDts != Long.MIN_VALUE) mp4.startUs = mp4.vuToUs(firstDts)
+            if (firstDts != Long.MIN_VALUE) {
+                if (clipDurationUs > 0) {
+                    // Frames before the cut's start (back to the keyframe) are decoded but not shown.
+                    if (firstDts < 0) mp4.mediaStartVu = -firstDts else mp4.startUs = mp4.vuToUs(firstDts)
+                    mp4.maxDurationUs = (clipDurationUs - mp4.startUs).coerceAtLeast(0)
+                } else mp4.startUs = mp4.vuToUs(firstDts)
+            }
             mp4.end()
         }
 

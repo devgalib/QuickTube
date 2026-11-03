@@ -33,6 +33,8 @@ internal class Mp4Track(
     var mediaStartVu = 0L
     /** When the track starts, in µs on a timeline shared by the tracks; a later start gets an empty edit. */
     var startUs = 0L
+    /** A cut: the edit list shows at most this much of the track. */
+    var maxDurationUs = Long.MAX_VALUE
 
     private var chunkCount = 0
     private var lastChunkSamples = -1
@@ -67,7 +69,7 @@ internal class Mp4Track(
         listOf(stsz, stss, stsc, co64).forEach { it.end() }
     }
 
-    fun durationUs() = vuToUs(durationVu - mediaStartVu)
+    fun durationUs() = minOf(vuToUs(durationVu - mediaStartVu), maxDurationUs)
     fun vuToUs(vu: Long) = vu * 1_000_000 / timescale
 
     override fun close() = listOf(stsz, stss, stsc, co64, stts.spill, ctts.spill).forEach { it.close() }

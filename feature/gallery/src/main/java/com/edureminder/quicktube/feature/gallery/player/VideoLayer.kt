@@ -31,6 +31,10 @@ class VideoZoom {
 
     val zoomed: Boolean get() = scale > 1.02f
 
+    /** Left edge and width (px) of the unzoomed picture inside the player, from the last layout; the bars beside it excluded. */
+    val pictureLeft: Float get() = ((boxW - baseW) / 2).coerceAtLeast(0f)
+    val pictureWidth: Float get() = if (baseW > 0f) minOf(baseW, boxW) else boxW
+
     internal fun bounds(baseW: Float, baseH: Float, boxW: Float, boxH: Float) {
         this.baseW = baseW; this.baseH = baseH; this.boxW = boxW; this.boxH = boxH
     }

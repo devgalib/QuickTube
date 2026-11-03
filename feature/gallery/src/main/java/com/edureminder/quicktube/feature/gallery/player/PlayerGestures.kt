@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChange
+import androidx.compose.ui.unit.IntSize
 import kotlin.math.abs
 
 /** Where a double tap landed: the system player rewinds on the left third, toggles in the middle, skips on the right. */
@@ -24,8 +25,8 @@ interface PlayerGestureHandler {
     val zoomed: Boolean
     fun onTap()
     fun onDoubleTap(zone: TapZone)
-    /** A finger held still: [position] decides 2X (left/centre) or the speed list (right third). */
-    fun onHoldStart(position: Offset, width: Int)
+    /** A finger held still: [position] decides 2X (left/centre) or the speed list (right third) in an area of [size]. */
+    fun onHoldStart(position: Offset, size: IntSize)
     /** The held finger moved; [y] is its position, for picking a speed from the list. */
     fun onHoldMove(y: Float)
     fun onHoldEnd()
@@ -58,7 +59,7 @@ fun Modifier.playerGestures(handler: PlayerGestureHandler): Modifier {
                     val third = size.width / 3f
                     h.onDoubleTap(if (pos.x < third) TapZone.LEFT else if (pos.x > 2 * third) TapZone.RIGHT else TapZone.CENTER)
                 },
-                onLongPress = { pos -> if (h.enabled && !h.zoomed) h.onHoldStart(pos, size.width) },
+                onLongPress = { pos -> if (h.enabled && !h.zoomed) h.onHoldStart(pos, size) },
                 onPress = {
                     tryAwaitRelease()
                     h.onHoldEnd()

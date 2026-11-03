@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tells the QA build apart from the Play install on the same phone. -->
+    <string name="app_name">QuickTube QA</string>
+</resources>

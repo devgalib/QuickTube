@@ -63,10 +63,9 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.Density
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -78,11 +77,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.Animatable
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.graphics.Color
@@ -268,6 +262,8 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
                 if (locked) lockFlash = System.nanoTime()
                 else { controls = !controls; touch() }
             },
+            // Holding for speed clears the screen down to the video, like the system player.
+            onHold = { controls = false },
         )
         Box(Modifier.fillMaxSize().playerGestures(gestures))
 
@@ -288,7 +284,7 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
                 ) { ControlCircle(QtIcons.PLock, "Unlock", actions.toggleLock, plain = true) }
             }
         }
-        GestureOverlays(feedback, state.durationMs, landscape)
+        GestureOverlays(feedback, state.durationMs, landscape, zoom)
         if ((state.error != null || state.videoUnsupported) && current != null) PlaybackErrorCard(
             unsupported = state.unsupported || state.videoUnsupported,
             soundOnly = state.error == null && state.videoUnsupported,
@@ -504,9 +500,8 @@ private class GestureFeedback {
     var level by mutableStateOf<Pair<Boolean, Float>?>(null) // (brightness?, 0..1)
     var seekPreview by mutableStateOf<Long?>(null)
     var holding by mutableStateOf(false)
-    /** Hold on the right third: the speed list is anchored at [pickerY] (px) with [HoldSpeeds]`[pickerIndex]` chosen. */
+    /** Hold on the right third: the speed list is up with [HoldSpeeds]`[pickerIndex]` chosen. */
     var picker by mutableStateOf(false)
-    var pickerY by mutableFloatStateOf(0f)
     var pickerIndex by mutableIntStateOf(1)
     var doubleTap by mutableStateOf<TapZone?>(null)
     var doubleTapAt by mutableLongStateOf(0L)
@@ -514,7 +509,7 @@ private class GestureFeedback {
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun GestureOverlays(f: GestureFeedback, durationMs: Long, landscape: Boolean) {
+private fun GestureOverlays(f: GestureFeedback, durationMs: Long, landscape: Boolean, video: VideoZoom) {
     LaunchedEffect(f.doubleTapAt) { if (f.doubleTap != null) { delay(650); f.doubleTap = null } }
     val status = WindowInsets.statusBarsIgnoringVisibility.asPaddingValues().calculateTopPadding()
     Box(Modifier.fillMaxSize()) {
@@ -537,10 +532,17 @@ private fun GestureOverlays(f: GestureFeedback, durationMs: Long, landscape: Boo
                 Text(clock(durationMs), color = Color.White, fontSize = 12.sp)
             }
         }
-        if (f.holding && f.picker) HoldSpeedList(f.pickerY, f.pickerIndex)
-        else if (f.holding) MessagePill(Modifier.align(Alignment.TopCenter).padding(top = status + 93.dp)) {
-            Icon(QtIcons.PPlay, null, tint = Color.White.copy(alpha = 0.7f), modifier = Modifier.size(16.dp))
-            Text("2.0X Speed", color = Color.White, fontSize = 15.sp)
+        AnimatedVisibility(f.holding && f.picker, enter = fadeIn(tween(150)), exit = fadeOut(tween(200))) {
+            HoldSpeedList(f.pickerIndex, video.pictureLeft, video.pictureWidth)
+        }
+        AnimatedVisibility(
+            f.holding && !f.picker, Modifier.align(Alignment.TopCenter).padding(top = status + 93.dp),
+            enter = fadeIn(tween(150)), exit = fadeOut(tween(200)),
+        ) {
+            MessagePill {
+                HoldChevrons(Modifier.size(20.dp, 12.dp))
+                Text("2.0X Speed", color = Color.White, fontSize = 15.sp)
+            }
         }
         f.doubleTap?.let { zone ->
             if (zone != TapZone.CENTER) MessagePill(
@@ -565,13 +567,17 @@ private fun rememberGestureHandler(
     f: GestureFeedback,
     locked: () -> Boolean,
     onTap: () -> Unit,
+    onHold: () -> Unit,
 ): PlayerGestureHandler {
     val context = LocalContext.current
+    val view = androidx.compose.ui.platform.LocalView.current
     val tap by rememberUpdatedState(onTap)
+    val hold by rememberUpdatedState(onHold)
     val duration by rememberUpdatedState(durationMs)
     return remember {
         object : PlayerGestureHandler {
             var holdPrevious = 1f
+            var holdRows: HoldGeometry? = null
             var level = 0f
             var seekBase = 0L
             var seekAcc = 0f
@@ -589,22 +595,25 @@ private fun rememberGestureHandler(
                 f.doubleTapAt = System.nanoTime()
             }
             override val holding get() = f.holding
-            override fun onHoldStart(position: Offset, width: Int) {
+            override fun onHoldStart(position: Offset, size: IntSize) {
                 holdPrevious = controller.state.value.speed
-                // Right third: the system player's speed list, starting at 1.5X under the finger. Elsewhere: 2.0X.
-                f.picker = position.x > width * 2f / 3f
-                f.pickerY = position.y
-                f.pickerIndex = 1
-                controller.setSpeed(if (f.picker) HoldSpeeds[1] else 2f)
+                // Right third: the system player's speed list, starting at the row under the finger. Elsewhere: 2.0X.
+                f.picker = position.x > size.width * 2f / 3f
+                val rows = HoldGeometry(size.height.toFloat(), Density(context))
+                holdRows = rows
+                f.pickerIndex = rows.rowAt(position.y)
+                controller.setSpeed(if (f.picker) HoldSpeeds[f.pickerIndex] else 2f)
+                view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS)
                 f.holding = true
+                hold()
             }
             override fun onHoldMove(y: Float) {
                 if (!f.picker) return
-                val step = HoldStepDp * context.resources.displayMetrics.density
-                val i = (1 + ((f.pickerY - y) / step).roundToInt()).coerceIn(0, HoldSpeeds.lastIndex)
+                val i = holdRows?.rowAt(y, f.pickerIndex) ?: return
                 if (i != f.pickerIndex) {
                     f.pickerIndex = i
                     controller.setSpeed(HoldSpeeds[i])
+                    view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
                 }
             }
             override fun onHoldEnd() {
@@ -716,72 +725,6 @@ private fun PipActions(activity: Activity?, controller: PlayerController, playin
     }
     LaunchedEffect(playing, inPip, ratio) {
         runCatching { activity.setPictureInPictureParams(pipParams(activity, ratio, playing)) }
-    }
-}
-
-/** Speeds offered by holding on the right of the video, slowest first. */
-private val HoldSpeeds = listOf(1.25f, 1.5f, 2f, 3f)
-/** How far the finger moves to step to the next speed. */
-private const val HoldStepDp = 44f
-private val HoldRow = 87.dp
-private val HoldBand = 56.dp
-
-/**
- * The system player's hold-for-speed list: four full-width bands (3.0X at the top, 1.25X at the bottom) around the
- * finger, each a soft left-to-right glow. The chosen speed reads larger with a ▶▶ mark ("1.5X Speed") and its band
- * brightens; changes animate so sliding the finger feels continuous. The list stays on screen near the edges.
- */
-@Composable
-private fun HoldSpeedList(anchorY: Float, selected: Int) {
-    val density = LocalDensity.current
-    val row = with(density) { HoldRow.toPx() }
-    val band = with(density) { HoldBand.toPx() }
-    val appear = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { appear.animateTo(1f, tween(180)) }
-    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize().graphicsLayer { alpha = appear.value }) {
-        val height = constraints.maxHeight.toFloat()
-        // Keep 3.0X (two rows above the finger) and 1.25X (one below) fully visible.
-        val anchor = anchorY.coerceIn(2 * row + band, (height - row - band).coerceAtLeast(2 * row + band))
-        HoldSpeeds.forEachIndexed { i, speed ->
-            val on = i == selected
-            val glow by animateFloatAsState(if (on) 1f else 0f, tween(160), label = "glow")
-            val centerY = anchor - (i - 1) * row
-            Box(
-                Modifier.fillMaxWidth().height(HoldBand)
-                    .offset { IntOffset(0, (centerY - band / 2).roundToInt()) }
-                    .drawBehind {
-                        drawRect(
-                            Brush.horizontalGradient(
-                                0f to Color.White.copy(alpha = 0.02f + 0.06f * glow),
-                                0.55f to Color.White.copy(alpha = 0.07f + 0.08f * glow),
-                                1f to Color.White.copy(alpha = 0.14f + 0.10f * glow),
-                            ),
-                        )
-                    },
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                Row(
-                    Modifier.padding(start = 96.dp).graphicsLayer {
-                        val scale = 1f + 0.22f * glow
-                        scaleX = scale; scaleY = scale
-                        transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0.5f)
-                    },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    if (on) {
-                        Icon(QtIcons.PFastForward, null, tint = Color.White, modifier = Modifier.size(19.dp))
-                        Spacer(Modifier.width(8.dp))
-                    }
-                    val label = (if (speed * 100 % 10 == 0f) "%.1fX" else "%.2fX").format(java.util.Locale.US, speed)
-                    Text(
-                        if (on) "$label Speed" else label,
-                        color = Color.White.copy(alpha = 0.7f + 0.3f * glow), fontSize = 15.sp,
-                        fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
-                        style = androidx.compose.ui.text.TextStyle(shadow = androidx.compose.ui.graphics.Shadow(Color.Black.copy(alpha = 0.5f), blurRadius = 6f)),
-                    )
-                }
-            }
-        }
     }
 }
 

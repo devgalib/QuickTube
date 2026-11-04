@@ -21,6 +21,7 @@ import org.koin.android.ext.android.inject
 class DownloadService : LifecycleService() {
     private val notifier: DownloadNotifier by inject()
     private val manager: DownloadManager by inject()
+    private var lastStartId = 0
 
     override fun onCreate() {
         super.onCreate()
@@ -30,11 +31,13 @@ class DownloadService : LifecycleService() {
     override fun onDestroy() {
         if (instance === this) instance = null
         inForeground = false
+        notifier.serviceStopped()
         super.onDestroy()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
+        lastStartId = startId
         val started = try {
             ServiceCompat.startForeground(
                 this, DownloadNotifier.ID_PROGRESS, notifier.progressNotification(emptyList()),
@@ -49,7 +52,7 @@ class DownloadService : LifecycleService() {
         manager.start()
         if (!started) {
             notifier.serviceStopped()
-            stopSelf()
+            stopSelf(startId)
             return START_NOT_STICKY
         }
         inForeground = true
@@ -65,16 +68,20 @@ class DownloadService : LifecycleService() {
         return START_STICKY
     }
 
-    private fun stopNow() {
+    /**
+     * Stops only if no newer start is on its way: stopping while a startForegroundService() call is still queued
+     * kills the app ("did not then call startForeground()"). The newer start then runs and goes foreground again.
+     */
+    private fun stopNow(force: Boolean = false) {
         inForeground = false
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-        stopSelf()
+        if (force) stopSelf() else stopSelf(lastStartId)
     }
 
     /** Android 15+: data-sync services get ~6h per day; pause cleanly instead of being killed. */
     override fun onTimeout(startId: Int, fgsType: Int) {
         manager.pauseAll()
-        stopNow()
+        stopNow(force = true) // Must stop within seconds; no new foreground start is allowed now anyway.
     }
 
     companion object {

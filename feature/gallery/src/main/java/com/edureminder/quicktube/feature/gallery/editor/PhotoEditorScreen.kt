@@ -3,6 +3,8 @@ package com.edureminder.quicktube.feature.gallery.editor
 import android.graphics.Bitmap
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -74,6 +76,7 @@ import com.edureminder.quicktube.core.designsystem.icon.QtIcons
 import com.edureminder.quicktube.core.designsystem.pressable
 import com.edureminder.quicktube.core.model.GalleryMedia
 import com.edureminder.quicktube.feature.gallery.uri
+import com.edureminder.quicktube.core.common.Permissions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
@@ -111,6 +114,22 @@ fun PhotoEditorScreen(mediaId: Long, onBack: () -> Unit) {
     var aspect by remember { mutableStateOf<Float?>(null) }
     var saving by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
+
+    fun save() {
+        val m = media ?: return
+        saving = true
+        scope.launch {
+            val name = withContext(Dispatchers.IO) { saveCopy(context, m.uri, m.name, edit) }
+            saving = false
+            Toast.makeText(context, if (name != null) "Saved to Pictures/QuickTube" else "Couldn't save the photo", Toast.LENGTH_SHORT).show()
+            if (name != null) onBack()
+        }
+    }
+    // Android 10 and older save into Pictures by file path, which needs storage permission (it may have been refused at startup).
+    val storage = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+        if (r.values.all { it }) save()
+        else Toast.makeText(context, "Storage permission is needed to save the photo", Toast.LENGTH_LONG).show()
+    }
 
     LaunchedEffect(mediaId) {
         repo.load()
@@ -150,14 +169,7 @@ fun PhotoEditorScreen(mediaId: Long, onBack: () -> Unit) {
                 Modifier.padding(start = 4.dp).clip(CircleShape).background(if (edit.isUnchanged) Color.White.copy(alpha = 0.12f) else Color.Transparent)
                     .then(if (edit.isUnchanged) Modifier else Modifier.background(LocalQtExtras.current.brand))
                     .pressable(enabled = !edit.isUnchanged && !saving, onClick = {
-                        val m = media ?: return@pressable
-                        saving = true
-                        scope.launch {
-                            val name = withContext(Dispatchers.IO) { saveCopy(context, m.uri, m.name, edit) }
-                            saving = false
-                            Toast.makeText(context, if (name != null) "Saved to Pictures/QuickTube" else "Couldn't save the photo", Toast.LENGTH_SHORT).show()
-                            if (name != null) onBack()
-                        }
+                        if (Permissions.granted(context, Permissions.storageWrite)) save() else storage.launch(Permissions.storageWrite)
                     })
                     .padding(horizontal = 18.dp, vertical = 9.dp),
             ) { Text("Save", color = if (edit.isUnchanged) Muted else Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }

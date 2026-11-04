@@ -122,8 +122,9 @@ fun AppNavHost(nav: NavHostController) {
     val barHidden = remember { mutableStateOf(false) }
     // The mini player only draws when something is loaded; nothing playing = no space kept for it.
     val miniVisible = showMini && !barHidden.value && playing.current != null
-    val activeCount by library.downloads.map { l -> l.count { it.status != DownloadStatus.COMPLETED && it.deletedAt == 0L } }
-        .collectAsStateWithLifecycle(0)
+    val activeCount by remember(library) {
+        library.downloads.map { l -> l.count { it.status != DownloadStatus.COMPLETED && it.deletedAt == 0L } }
+    }.collectAsStateWithLifecycle(0)
 
     fun openUrl(url: String) = nav.navigate(router.routeFor(url))
     fun downloadUrl(url: String) = nav.navigate(router.routeForPasted(url))

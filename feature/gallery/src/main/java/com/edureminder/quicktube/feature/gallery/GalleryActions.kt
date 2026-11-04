@@ -30,11 +30,15 @@ object GalleryActions {
         start(context, Intent.createChooser(send, null))
     }
 
+    /**
+     * Read access only: QuickTube can't hand on write access to media another app (the camera) owns, and Android
+     * throws a SecurityException at startActivity() if it tries. Editors save their result as a new file.
+     */
     fun edit(context: Context, media: GalleryMedia) = start(
         context,
         Intent.createChooser(
             Intent(Intent.ACTION_EDIT).setDataAndType(media.uri, media.mimeType.ifBlank { if (media.isVideo) "video/*" else "image/*" })
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION),
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION),
             null,
         ),
     )
@@ -88,6 +92,9 @@ object GalleryActions {
             context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         } catch (_: ActivityNotFoundException) {
             Toast.makeText(context, "No app can do this", Toast.LENGTH_SHORT).show()
+        } catch (_: SecurityException) {
+            // Access to the file was lost (permission revoked, or only some photos allowed on Android 14+).
+            Toast.makeText(context, "QuickTube can't open this file", Toast.LENGTH_SHORT).show()
         }
     }
 }

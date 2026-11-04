@@ -103,6 +103,7 @@ import com.edureminder.quicktube.core.model.GalleryMedia
 import com.edureminder.quicktube.feature.gallery.GalleryActions
 import com.edureminder.quicktube.feature.gallery.ImmersiveBars
 import com.edureminder.quicktube.feature.gallery.rememberDeleteAction
+import com.edureminder.quicktube.core.common.Permissions
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
@@ -156,6 +157,17 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
     val feedback = remember { GestureFeedback() }
     fun touch() = touch.mark()
     fun say(text: String) { toast = text; toastAt = System.nanoTime() }
+    fun saveAudio(media: GalleryMedia) {
+        say("Saving audio…")
+        scope.launch { val n = vm.extractAudio(media); say(if (n != null) "Saved to Music/QuickTube" else "Couldn't extract audio") }
+    }
+    // Android 10 and older save into Music by file path, which needs storage permission (it may have been refused at startup).
+    var audioPending by remember { mutableStateOf<GalleryMedia?>(null) }
+    val storage = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+        val m = audioPending ?: return@rememberLauncherForActivityResult
+        audioPending = null
+        if (r.values.all { it }) saveAudio(m) else say("Storage permission is needed to save audio")
+    }
 
     // Controls fade out 3.5s after the last touch anywhere on screen (scrolling the strip, dragging the seek bar, taps
     // on buttons all count), never while a finger is down, and never while a sheet is open — like the system player.
@@ -239,8 +251,8 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
             onBackToVideo = { controller.setAudioOnly(false) },
             onClose = onBack,
             onToMp3 = {
-                say("Saving audio…")
-                scope.launch { val n = vm.extractAudio(current); say(if (n != null) "Saved to Music/QuickTube" else "Couldn't extract audio") }
+                if (Permissions.granted(context, Permissions.storageWrite)) saveAudio(current)
+                else { audioPending = current; storage.launch(Permissions.storageWrite) }
             },
             onFavorite = { vm.favoriteRequest()?.let { favorite.launch(IntentSenderRequest.Builder(it).build()) } },
             onMode = { say(vm.nextMode().toast) },

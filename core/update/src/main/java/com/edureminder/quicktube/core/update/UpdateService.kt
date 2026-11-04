@@ -15,6 +15,7 @@ import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Job
 import com.edureminder.quicktube.core.common.Format
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
@@ -26,6 +27,7 @@ import org.koin.android.ext.android.inject
  */
 class UpdateService : LifecycleService() {
     private val manager: UpdateManager by inject()
+    private var follow: Job? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
@@ -36,8 +38,9 @@ class UpdateService : LifecycleService() {
                 if (Build.VERSION.SDK_INT >= 29) ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC else 0,
             )
         }.onFailure { Log.w("UpdateService", "Can't run in the foreground: $it") }.isSuccess
-        if (!started) { stopSelf(); return START_NOT_STICKY }
-        lifecycleScope.launch {
+        if (!started) { stopSelf(startId); return START_NOT_STICKY }
+        follow?.cancel()
+        follow = lifecycleScope.launch {
             var last = 0L
             manager.state.collect { s ->
                 if (s is UpdateState.Downloading) {
@@ -48,11 +51,19 @@ class UpdateService : LifecycleService() {
                     }
                 } else {
                     ServiceCompat.stopForeground(this@UpdateService, ServiceCompat.STOP_FOREGROUND_REMOVE)
-                    stopSelf()
+                    // Only this start: a newer startForegroundService() still on its way must not find the service gone.
+                    stopSelf(startId)
                 }
             }
         }
         return START_NOT_STICKY
+    }
+
+    /** Android 15+: the day's data-sync time ran out. Stop within seconds or Android kills the app; the download goes on in-process. */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        follow?.cancel()
+        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     companion object {

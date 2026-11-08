@@ -400,16 +400,18 @@ private fun FeatureTile(
     title: String, subtitle: String, icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color,
     modifier: Modifier, onClick: () -> Unit,
 ) {
+    // Fixed height so both tiles in a row are the same size; text is capped to one line each.
     Column(
-        modifier.clip(RoundedCornerShape(22.dp))
+        modifier.height(150.dp).clip(RoundedCornerShape(22.dp))
             .background(Brush.linearGradient(listOf(tint.copy(alpha = 0.16f), MaterialTheme.colorScheme.surfaceContainerLow)))
             .border(1.dp, tint.copy(alpha = 0.18f), RoundedCornerShape(22.dp))
             .pressable(scaleDown = 0.96f, onClick = onClick).padding(16.dp),
     ) {
         IconTile(icon, tint = tint, size = 42.dp)
-        Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 14.dp))
-        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2,
-            modifier = Modifier.padding(top = 2.dp))
+        Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = 14.dp))
+        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = 2.dp))
     }
 }
 

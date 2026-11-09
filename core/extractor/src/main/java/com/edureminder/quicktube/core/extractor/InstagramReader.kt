@@ -13,7 +13,15 @@ data class InstagramItem(
     val height: Int,
 )
 
-data class InstagramPost(val title: String, val owner: String?, val thumbnail: String?, val items: List<InstagramItem>, val durationSec: Double? = null)
+data class InstagramPost(
+    val title: String,
+    val owner: String?,
+    val thumbnail: String?,
+    val items: List<InstagramItem>,
+    val durationSec: Double? = null,
+    /** The song added to a photo post (Instagram plays it over the photos); null when it has none. */
+    val music: String? = null,
+)
 
 /**
  * Instagram posts, reels and IGTV from the post's public embed page (`/p/<code>/embed/captioned/`), the page Instagram
@@ -33,6 +41,49 @@ object InstagramReader {
     fun shortcode(url: String): String? = POST.find(url)?.groupValues?.get(1)
 
     fun embedUrl(shortcode: String) = "https://www.instagram.com/p/$shortcode/embed/captioned/"
+
+    /** The app's media API (needs the signed-in session, and [API_HEADERS]): every item, and a photo post's song. */
+    fun apiUrl(shortcode: String) = "https://www.instagram.com/api/v1/media/${mediaId(shortcode)}/info/"
+
+    /** Instagram's web app id; the API answers only requests that name it. */
+    val API_HEADERS = mapOf("X-IG-App-ID" to "936619743392459", "X-Requested-With" to "XMLHttpRequest")
+
+    /** A shortcode is the media id in base 64 (A–Z a–z 0–9 - _); longer private codes add a suffix after 11 characters. */
+    internal fun mediaId(shortcode: String): String {
+        val alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+        return shortcode.take(11).fold(java.math.BigInteger.ZERO) { acc, c ->
+            acc.shiftLeft(6).add(java.math.BigInteger.valueOf(alphabet.indexOf(c).coerceAtLeast(0).toLong()))
+        }.toString()
+    }
+
+    /** The media API's answer; null when it isn't one (signed out: a login page or an error). */
+    fun parseApi(json: String): InstagramPost? = runCatching {
+        val m = JSONObject(json).optJSONArray("items")?.optJSONObject(0) ?: return null
+        val owner = m.optJSONObject("user")?.optString("username")?.takeIf { it.isNotBlank() }
+        val caption = m.optJSONObject("caption")?.optString("text")?.lineSequence()?.firstOrNull { it.isNotBlank() }?.take(80)
+        val children = m.optJSONArray("carousel_media")
+        val nodes = if (children != null && children.length() > 0) (0 until children.length()).mapNotNull { children.optJSONObject(it) } else listOf(m)
+        val items = nodes.mapNotNull { n ->
+            val image = n.optJSONObject("image_versions2")?.optJSONArray("candidates")?.optJSONObject(0)
+            val video = n.optJSONArray("video_versions")?.optJSONObject(0)
+            when {
+                video != null && video.optString("url").isNotBlank() ->
+                    InstagramItem(true, video.optString("url"), image?.optString("url"), video.optInt("width"), video.optInt("height"))
+                image != null && image.optString("url").isNotBlank() ->
+                    InstagramItem(false, image.optString("url"), image.optString("url"), image.optInt("width"), image.optInt("height"))
+                else -> null
+            }
+        }
+        if (items.isEmpty()) return null
+        val asset = m.optJSONObject("music_metadata")?.optJSONObject("music_info")?.optJSONObject("music_asset_info")
+        val music = asset?.optString("progressive_download_url")?.ifBlank { null } ?: asset?.optString("fast_start_progressive_download_url")?.ifBlank { null }
+        val kind = when { items.size > 1 -> "Post"; items[0].isVideo -> "Video"; else -> "Photo" }
+        InstagramPost(
+            caption ?: owner?.let { "$kind by $it" } ?: "Instagram ${kind.lowercase()}", owner, items[0].thumbnail, items,
+            m.optDouble("video_duration").takeIf { !it.isNaN() && it > 0 },
+            music = music.takeIf { items.any { !it.isVideo } },
+        )
+    }.getOrNull()
 
     /** Null when the page holds no media (removed, private, or not an embed page). */
     fun parseEmbed(html: String): InstagramPost? {

@@ -60,6 +60,7 @@ class SettingsDataSource(private val context: Context) {
         val autoPip = booleanPreferencesKey("auto_pip")
         val autoplayNext = booleanPreferencesKey("autoplay_next")
         val showTrending = booleanPreferencesKey("show_trending")
+        val captionStyle = stringPreferencesKey("caption_style")
     }
 
     val defaultDownloadDir: String
@@ -108,6 +109,7 @@ class SettingsDataSource(private val context: Context) {
             p[K.autoPip] = s.autoPip
             p[K.autoplayNext] = s.autoplayNext
             p[K.showTrending] = s.showTrending
+            p[K.captionStyle] = s.captionStyle.encode()
         }
     }
 
@@ -147,6 +149,7 @@ class SettingsDataSource(private val context: Context) {
         autoPip = p[K.autoPip] ?: true,
         autoplayNext = p[K.autoplayNext] ?: true,
         showTrending = p[K.showTrending] ?: false,
+        captionStyle = com.edureminder.quicktube.core.model.CaptionStyle.decode(p[K.captionStyle]),
     )
 }
 

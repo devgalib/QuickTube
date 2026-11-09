@@ -41,6 +41,8 @@ internal class LibraryRepositoryImpl(
         )
         ids.forEach { id ->
             dao.get(id)?.let { e ->
+                // Its caption files go with it.
+                com.edureminder.quicktube.core.common.SubtitleSidecars.find(File(e.filePath)).forEach { it.second.delete() }
                 File(e.filePath).delete()
                 File(e.filePath + ".part").delete()
                 File(e.filePath + ".audio.part").delete()
@@ -82,7 +84,10 @@ internal class LibraryRepositoryImpl(
         val safe = newTitle.replace(Regex("""[\\/:*?"<>|]"""), "_").trim().ifBlank { return@withContext false }
         val target = File(old.parentFile, if (ext.isBlank()) safe else "$safe.$ext")
         if (target.exists() && target != old) return@withContext false
+        val captions = com.edureminder.quicktube.core.common.SubtitleSidecars.find(old)
         if (old.exists() && !old.renameTo(target)) return@withContext false
+        // Caption files keep matching the video's name (and their language tag).
+        captions.forEach { (_, f) -> f.renameTo(File(f.parentFile, target.nameWithoutExtension + f.name.removePrefix(old.nameWithoutExtension))) }
         dao.update(e.copy(title = safe, filePath = target.absolutePath))
         true
     }

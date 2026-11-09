@@ -7,4 +7,7 @@ val videoModule = module {
     viewModel { VideoViewModel(get(), get(), get()) }
     viewModel { ListPageViewModel(get()) }
     viewModel { SavedVideosViewModel(get()) }
+    viewModel { WatchHistoryViewModel(get(), get()) }
+    viewModel { p -> LocalPlaylistsViewModel(p.get(), get()) }
+    viewModel { p -> LocalPlaylistViewModel(p.get(), get()) }
 }

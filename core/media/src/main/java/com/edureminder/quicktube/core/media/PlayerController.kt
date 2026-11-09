@@ -46,6 +46,8 @@ data class PlayItem(
     val startPositionMs: Long = 0,
     /** Key in the playback history (file path, page URL); defaults to [id]. */
     val historyKey: String? = null,
+    /** Captions to show from the start (WebVTT, or SRT for a ".srt" address). */
+    val subtitleUri: String? = null,
 ) {
     val resumeKey: String get() = historyKey ?: id
 }
@@ -192,14 +194,26 @@ class PlayerController(
     val audioSessionId: Int get() = PlaybackService.exo?.audioSessionId ?: 0
 
     /** Adds a subtitle file (SRT, VTT, SSA…) to the current item and keeps the position. */
-    fun addSubtitle(uri: Uri, mimeType: String) {
+    fun addSubtitle(uri: Uri, mimeType: String) = setSubtitle(uri, mimeType)
+
+    /**
+     * Shows the captions at [uri] (WebVTT by default) on the current item, or none when null. The item is rebuilt
+     * with them and continues where it was.
+     */
+    fun setSubtitle(uri: Uri?, mimeType: String = androidx.media3.common.MimeTypes.TEXT_VTT) {
         val exo = PlaybackService.exo ?: return
         val item = exo.currentMediaItem ?: return
+        val configs = uri?.let {
+            listOf(MediaItem.SubtitleConfiguration.Builder(it).setMimeType(mimeType).setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build())
+        }.orEmpty()
+        if (item.localConfiguration?.subtitleConfigurations.orEmpty().map { it.uri } == configs.map { it.uri }) return
         val index = exo.currentMediaItemIndex
         val position = exo.currentPosition
-        val sub = MediaItem.SubtitleConfiguration.Builder(uri).setMimeType(mimeType).setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build()
-        exo.replaceMediaItem(index, item.buildUpon().setSubtitleConfigurations(listOf(sub)).build())
-        exo.seekTo(index, position)
+        // Not replaceMediaItem: for the same address it updates the item in place and ignores new caption tracks.
+        exo.addMediaItem(index + 1, item.buildUpon().setSubtitleConfigurations(configs).build())
+        exo.seekTo(index + 1, position)
+        exo.removeMediaItem(index)
+        _cues.value = ""
     }
 
     data class AudioTrack(val label: String, val group: Int, val track: Int, val selected: Boolean)
@@ -260,7 +274,11 @@ class PlayerController(
         if (!prefs.playHistory) return
         positions[item.resumeKey] = positionMs
         val h = history ?: return
-        scope.launch { runCatching { h.save(item.resumeKey, item.title, positionMs, durationMs, opened) } }
+        // Online videos and songs keep their picture and channel for the watch history.
+        val online = !item.resumeKey.startsWith("/")
+        scope.launch {
+            runCatching { h.save(item.resumeKey, item.title, positionMs, durationMs, opened, item.artwork.takeIf { online }, item.artist.takeIf { online }) }
+        }
     }
 
     private fun markOpened(item: PlayItem) = record(item, positions[item.resumeKey] ?: 0, 0, opened = true)
@@ -362,7 +380,7 @@ class PlayerController(
             .setRequestMetadata(
                 MediaItem.RequestMetadata.Builder()
                     .setMediaUri(uri)
-                    .setExtras(PlaybackService.extras(id, isVideo, audioUri))
+                    .setExtras(PlaybackService.extras(id, isVideo, audioUri, subtitleUri))
                     .build(),
             )
             .setMediaMetadata(

@@ -125,18 +125,21 @@ fun VideoPlayerBox(
     /** Next button when the player has no queue of its own (the video page's next suggestion). */
     onNext: (() -> Unit)? = null,
     upNext: UpNext? = null,
+    /** The video's caption tracks (the CC button); null when it has none. */
+    captions: CaptionMenu? = null,
 ) {
     val player by controller.player.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var controlsVisible by remember { mutableStateOf(true) }
     var lastInteraction by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var sheetOpen by remember { mutableStateOf(false) }
+    var captionSheet by remember { mutableStateOf(false) }
     var scrubbing by remember { mutableStateOf(false) }
     var sleepAt by remember { mutableLongStateOf(0L) }
     val feedback = remember { GestureFeedback() }
     fun touch() { lastInteraction = System.currentTimeMillis() }
-    LaunchedEffect(controlsVisible, lastInteraction, state.isPlaying, sheetOpen, scrubbing) {
-        if (controlsVisible && state.isPlaying && !sheetOpen && !scrubbing) {
+    LaunchedEffect(controlsVisible, lastInteraction, state.isPlaying, sheetOpen, captionSheet, scrubbing) {
+        if (controlsVisible && state.isPlaying && !sheetOpen && !captionSheet && !scrubbing) {
             delay(3000)
             controlsVisible = false
         }
@@ -192,6 +195,8 @@ fun VideoPlayerBox(
                 if (onRetry != null) QtIconButton(QtIcons.Replay, "Retry", onRetry, tint = Color.White)
             }
         }
+        // Captions sit above the bottom controls while they show, near the bottom edge otherwise.
+        CaptionOverlay(controller, fullscreen, avoidBottom = if (overlayControls && controlsVisible) (if (fullscreen) 96.dp else 52.dp) else (if (fullscreen) 24.dp else 8.dp))
         // Collapsed controls: YouTube keeps a thin red progress line along the bottom edge.
         if (overlayControls && !fullscreen && !controlsVisible && state.durationMs > 0) LineProgress(
             position, state.bufferedMs, state.durationMs, Modifier.align(Alignment.BottomStart).fillMaxWidth(),
@@ -212,10 +217,12 @@ fun VideoPlayerBox(
                     } else Spacer(Modifier.weight(1f))
                     if (autoplay != null) AutoplaySwitch(autoplay) { onAutoplayChange(it); touch() }
                     if (onPip != null) TopIcon(QtIcons.PictureInPicture, "Picture-in-picture", onPip)
-                    TopIcon(QtIcons.ClosedCaption, "Captions") {
-                        Toast.makeText(context, "Captions aren't available for this video", Toast.LENGTH_SHORT).show(); touch()
-                    }
-                    TopIcon(QtIcons.Settings, "Settings") { sheetOpen = true }
+                    TopIcon(QtIcons.ClosedCaption, if (captions?.selected != null) "Captions on" else "Captions", onClick = {
+                        if (captions == null || captions.tracks.isEmpty()) Toast.makeText(context, "Captions aren't available for this video", Toast.LENGTH_SHORT).show()
+                        else captionSheet = true
+                        touch()
+                    }, on = captions?.selected != null)
+                    TopIcon(QtIcons.Settings, "Settings", onClick = { sheetOpen = true })
                 }
                 Row(Modifier.align(Alignment.Center), horizontalArrangement = Arrangement.spacedBy(if (fullscreen) 72.dp else 44.dp),
                     verticalAlignment = Alignment.CenterVertically) {
@@ -258,6 +265,9 @@ fun VideoPlayerBox(
         // Sleep timer "End of video" means stop here, not autoplay the next one.
         if (overlayControls && upNext != null && autoplay == true && state.ended && sleepAt != -1L) UpNextOverlay(upNext, fullscreen)
     }
+    var styleSheet by remember { mutableStateOf(false) }
+    if (captionSheet && captions != null) CaptionSheet(captions, onDismiss = { captionSheet = false; touch() }, onStyle = { captionSheet = false; styleSheet = true })
+    if (styleSheet) CaptionStyleSheet { styleSheet = false; touch() }
     if (sheetOpen) YtSettingsSheet(
         state = state, controller = controller, quality = quality, onPip = onPip, extra = options,
         sleepAt = sleepAt, onSleep = { sleepAt = it },
@@ -315,9 +325,11 @@ private fun rememberPlayerPosition(controller: PlayerController, state: Playback
 }
 
 @Composable
-private fun TopIcon(icon: ImageVector, description: String, onClick: () -> Unit) {
+private fun TopIcon(icon: ImageVector, description: String, onClick: () -> Unit, on: Boolean = false) {
     Box(Modifier.size(44.dp).clip(CircleShape).pressable(scaleDown = 0.88f, onClick = onClick), contentAlignment = Alignment.Center) {
         Icon(icon, description, tint = Color.White, modifier = Modifier.size(24.dp))
+        // YouTube marks captions that are on with a red bar under the icon.
+        if (on) Box(Modifier.align(Alignment.BottomCenter).padding(bottom = 7.dp).size(18.dp, 2.dp).background(Color(0xFFFF0033)))
     }
 }
 

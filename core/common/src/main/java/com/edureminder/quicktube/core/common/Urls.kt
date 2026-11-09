@@ -18,6 +18,28 @@ object Urls {
 
     fun extractUrl(text: String?): String? = text?.let { urlRegex.find(it)?.value?.trimEnd('.', ',', ')') }
 
+    /**
+     * Every link in [text] (a pasted list or a .txt file), in order and each once: full addresses anywhere in a line,
+     * plus bare "youtu.be/…" style lines. Trailing punctuation is dropped; a link differing only by "www."/"m." or a
+     * trailing slash counts as the same.
+     */
+    fun extractUrls(text: String): List<String> {
+        val seen = HashSet<String>()
+        val out = ArrayList<String>()
+        for (line in text.lineSequence()) {
+            val found = urlRegex.findAll(line).map { it.value }.toList().ifEmpty {
+                line.split(Regex("""\s+""")).filter { it.contains('.') && it.contains('/') && looksLikeUrl(it) }.map(::normalize)
+            }
+            for (raw in found) {
+                val u = raw.trimEnd('.', ',', ')', ';', ']', '"', '\'')
+                // The same YouTube video by any address (youtu.be, watch?v=, shorts/) counts once.
+                val key = youtubeVideoId(u)?.let { "yt:$it" } ?: u.lowercase().replace(Regex("""^https?://(www\.|m\.)?"""), "").trimEnd('/')
+                if (key.length > 3 && seen.add(key)) out += u
+            }
+        }
+        return out
+    }
+
     fun looksLikeUrl(text: String): Boolean {
         val t = text.trim()
         if (t.contains(' ')) return false
@@ -28,6 +50,42 @@ object Urls {
     fun normalize(text: String): String {
         val t = text.trim()
         return if (t.startsWith("http://", true) || t.startsWith("https://", true)) t else "https://$t"
+    }
+
+    /**
+     * The address of a media file without its query (CDNs put expiring tokens there), when its name says which video
+     * it is (Facebook's "…_n.mp4"); null for shared names like YouTube's "/videoplayback" or playlists.
+     */
+    fun mediaFileKey(url: String): String? {
+        val path = url.substringBefore('#').substringBefore('?')
+        val name = path.substringAfterLast('/')
+        val ext = name.substringAfterLast('.', "").lowercase()
+        // TikTok's CDN names each video by a long id folder ("…/video/tos/<region>/<bucket>/<id>/?…") without an extension.
+        if ("/video/tos/" in path && path.trimEnd('/').substringAfterLast('/').length >= 16) return path.trimEnd('/')
+        return path.takeIf { ext in setOf("mp4", "webm", "m4a", "mov", "mkv", "mp3") && name.length >= 12 }
+    }
+
+    /**
+     * Whether [url] is the page of one video or post (a TikTok video, an Instagram post or reel, a YouTube video, a
+     * tweet…), as opposed to a feed, profile or home page where many videos play under one address.
+     */
+    fun namesOneMedia(url: String?): Boolean {
+        val u = url ?: return false
+        val path = runCatching { URI(u).path.orEmpty() }.getOrDefault("").trimEnd('/')
+        val full = u.lowercase()
+        return when (platformOf(u)) {
+            Platform.YOUTUBE -> youtubeVideoId(u) != null
+            Platform.TIKTOK -> Regex("""/(video|photo)/\d+""").containsMatchIn(path) || host(u)?.let { it.startsWith("vm.") || it.startsWith("vt.") } == true
+            Platform.INSTAGRAM -> Regex("""/(p|reel|reels|tv)/[^/]+|/stories/[^/]+/\d+""").containsMatchIn(path)
+            Platform.FACEBOOK -> Regex("""/(videos|reel|reels|posts|permalink|watch|share)/|story_fbid=|[?&]v=\d|/photo""").containsMatchIn(full)
+            else -> if (host(u)?.let { it == "x.com" || it == "twitter.com" } == true) "/status/" in path else path.isNotEmpty()
+        }
+    }
+
+    /** A title that says nothing about the video: blank, "video", or just the site's name ("Facebook"). */
+    fun isGenericTitle(title: String): Boolean {
+        val t = title.trim().lowercase()
+        return t.isEmpty() || t == "video" || Platform.entries.any { t == it.title.lowercase() || t == "${it.title.lowercase()} video" }
     }
 
     fun host(url: String?): String? = try {

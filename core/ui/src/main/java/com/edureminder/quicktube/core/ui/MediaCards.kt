@@ -94,12 +94,26 @@ fun DownloadIconButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     )
 }
 
+/** How far each YouTube video was watched (video id → 0..1), from the watch history; provided by the app. */
+val LocalWatchProgress = androidx.compose.runtime.staticCompositionLocalOf<Map<String, Float>> { emptyMap() }
+
+/** YouTube's red "watched" bar along the bottom of a thumbnail, when the video was partly watched. */
+@Composable
+fun BoxScope.WatchedBar(url: String) {
+    val p = com.edureminder.quicktube.core.common.Urls.youtubeVideoId(url)?.let { LocalWatchProgress.current[it] } ?: return
+    if (p < 0.02f) return
+    Box(Modifier.align(Alignment.BottomStart).fillMaxWidth().height(3.dp).background(Color.White.copy(alpha = 0.35f))) {
+        Box(Modifier.fillMaxWidth(p).height(3.dp).background(Color(0xFFFF0033)))
+    }
+}
+
 /** Full-width feed card: large thumbnail, avatar, title and a quick download button. */
 @Composable
 fun VideoFeedCard(item: MediaItem, onClick: () -> Unit, onDownload: () -> Unit, onChannel: (() -> Unit)? = null) {
     Column(Modifier.fillMaxWidth().pressable(scaleDown = 0.985f, role = null, onClick = onClick).padding(bottom = 18.dp)) {
         Thumbnail(item.thumbnail, Modifier.padding(horizontal = 16.dp).fillMaxWidth().aspectRatio(16f / 9f), corner = 20) {
             CornerLabel(if (item.isLive) "LIVE" else Format.duration(item.durationSec), live = item.isLive)
+            WatchedBar(item.url)
         }
         Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 12.dp), verticalAlignment = Alignment.Top) {
             Avatar(item.uploaderAvatar, 38, Modifier.then(if (onChannel != null) Modifier.pressable(scaleDown = 0.9f, onClick = onChannel) else Modifier))
@@ -143,7 +157,7 @@ fun MediaRow(
                             if (item.streamCount >= 0) Text("${item.streamCount}", color = Color.White, style = MaterialTheme.typography.labelSmall)
                         }
                     }
-                    else -> CornerLabel(if (item.isLive) "LIVE" else Format.duration(item.durationSec), live = item.isLive)
+                    else -> { CornerLabel(if (item.isLive) "LIVE" else Format.duration(item.durationSec), live = item.isLive); WatchedBar(item.url) }
                 }
             }
         }

@@ -82,7 +82,7 @@ internal class DownloadNotifier(
             running.size == 1 -> first.title
             else -> "Downloading ${running.size} files"
         }
-        val text = if (first?.status == DownloadStatus.MERGING) "Processing video…"
+        val text = if (first?.status == DownloadStatus.MERGING) { if (first.filePath.endsWith(".mp3", ignoreCase = true)) "Converting to MP3…" else "Processing video…" }
         else "${Format.bytes(done)} / ${if (total > 0) Format.bytes(total) else "--"}"
         return NotificationCompat.Builder(context, CH_PROGRESS)
             .setSmallIcon(android.R.drawable.stat_sys_download)

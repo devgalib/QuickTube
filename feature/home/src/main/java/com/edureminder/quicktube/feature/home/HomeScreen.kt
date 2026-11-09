@@ -95,6 +95,10 @@ class HomeActions(
     /** A link the user pasted/copied: go straight to downloading it. */
     val downloadUrl: (String) -> Unit,
     val openItem: (MediaItem) -> Unit,
+    /** YouTube watch history. */
+    val openWatchHistory: () -> Unit = {},
+    /** Plays [songs] as music (audio, music player) starting at the given one. */
+    val playMusic: (songs: List<MediaItem>, index: Int) -> Unit = { s, i -> openItem(s[i]) },
     val openChannel: (String) -> Unit,
     val openHowTo: (String) -> Unit,
     val openSites: () -> Unit,
@@ -102,6 +106,9 @@ class HomeActions(
     val openVault: () -> Unit = {},
     /** All our games (See all on the games row). */
     val openGames: () -> Unit = {},
+    val openBulk: () -> Unit = {},
+    val openPlaylists: (music: Boolean) -> Unit = {},
+    val openLocalPlaylist: (Long) -> Unit = {},
 )
 
 private val tabs = listOf("Search", "YouTube", "Music", "More")
@@ -113,12 +120,17 @@ fun HomeScreen(actions: HomeActions, modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val sheet = koinInject<DownloadSheetController>()
 
+    // Another screen asked for a tab (Sites → YouTube).
+    val requested by com.edureminder.quicktube.core.navigation.HomeTabs.request.collectAsStateWithLifecycle()
+    LaunchedEffect(requested) {
+        requested?.let { pager.scrollToPage(it); com.edureminder.quicktube.core.navigation.HomeTabs.consumed() }
+    }
+
     LaunchedEffect(pager.currentPage) {
         when (pager.currentPage) {
             // The Search page warms the YouTube tab only when it shows the trending row (Settings → Trending on home).
             0 -> { if (vm.showTrending.value) vm.ensureFeed() }
             1 -> vm.ensureFeed()
-            2 -> vm.ensureMusic()
         }
     }
 
@@ -127,8 +139,8 @@ fun HomeScreen(actions: HomeActions, modifier: Modifier = Modifier) {
         HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 0) { page ->
             when (page) {
                 0 -> DiscoverTab(vm, actions, onDownload = sheet::open, onSeeTrending = { scope.launch { pager.animateScrollToPage(1) } }, onSeeMusic = { scope.launch { pager.animateScrollToPage(2) } })
-                1 -> FeedTab(vm, actions, onDownload = sheet::open)
-                2 -> MusicTab(vm, actions, onDownload = sheet::open)
+                1 -> YouTubeTab(actions, onDownload = sheet::open) { FeedTab(vm, actions, onDownload = sheet::open) }
+                2 -> MusicHome(actions, onDownload = sheet::open)
                 else -> MoreTab(actions)
             }
         }
@@ -186,7 +198,6 @@ private fun DiscoverTab(
     val ex = LocalQtExtras.current
     val sheet = koinInject<DownloadSheetController>()
     val feed by vm.feed.collectAsStateWithLifecycle()
-    val music by vm.music.collectAsStateWithLifecycle()
     val recent by vm.recent.collectAsStateWithLifecycle()
     val games by vm.games.collectAsStateWithLifecycle()
     val showTrending by vm.showTrending.collectAsStateWithLifecycle()
@@ -282,7 +293,7 @@ private fun DiscoverTab(
                         }
                     }
                     Spacer(Modifier.height(22.dp))
-                    QuickSites(actions)
+                    QuickSites(actions, onYouTube = onSeeTrending)
                 }
             }
             if (showTrending && (feed.items.isNotEmpty() || feed.loading)) item(key = "trending") {
@@ -313,15 +324,13 @@ private fun DiscoverTab(
             }
             item(key = "features") {
                 DiscoverHeader("Do more with QuickTube", QtIcons.Bolt, null)
-                Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        FeatureTile("Share to download", "From YouTube, Facebook, TikTok…", QtIcons.Share, Color(0xFF2FCB7A), Modifier.weight(1f)) { actions.openHowTo("YOUTUBE") }
-                        FeatureTile("Browse any site", "Videos are detected automatically", QtIcons.Public, Color(0xFF4C8DFF), Modifier.weight(1f), actions.openSites)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        FeatureTile("Private vault", "Hide files behind a PIN", QtIcons.Lock, Color(0xFFFF5C93), Modifier.weight(1f), actions.openVault)
-                        FeatureTile("WhatsApp status", "Save statuses you've viewed", QtIcons.Downloading, Color(0xFF25D366), Modifier.weight(1f)) { actions.openHowTo("WHATSAPP") }
-                    }
+                EqualHeightGrid(Modifier.padding(horizontal = 16.dp)) {
+                    FeatureTile("Bulk download", "Hundreds of links or a .txt file", QtIcons.Checklist, Color(0xFFFF8A3D), Modifier, actions.openBulk)
+                    FeatureTile("Share to download", "From YouTube, Facebook, TikTok…", QtIcons.Share, Color(0xFF2FCB7A), Modifier) { actions.openHowTo("YOUTUBE") }
+                    FeatureTile("Browse any site", "Videos are detected automatically", QtIcons.Public, Color(0xFF4C8DFF), Modifier, actions.openSites)
+                    FeatureTile("Private vault", "Hide files behind a PIN", QtIcons.Lock, Color(0xFFFF5C93), Modifier, actions.openVault)
+                    FeatureTile("WhatsApp status", "Save statuses you've viewed", QtIcons.Downloading, Color(0xFF25D366), Modifier) { actions.openHowTo("WHATSAPP") }
+                    FeatureTile("Watch history", "Pick up where you left off", QtIcons.History, Color(0xFF9B6BFF), Modifier, actions.openWatchHistory)
                 }
             }
         }
@@ -408,19 +417,39 @@ private fun FeatureTile(
     ) {
         IconTile(icon, tint = tint, size = 42.dp)
         Text(title, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 14.dp))
-        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2,
+        Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 2.dp))
     }
 }
 
+/**
+ * Two columns of tiles that all take the height of the tallest one, so every card is the same size and no text
+ * is cut (wrapping titles or a large system font just make all cards taller).
+ */
 @Composable
-private fun QuickSites(actions: HomeActions) {
+private fun EqualHeightGrid(modifier: Modifier, gap: androidx.compose.ui.unit.Dp = 12.dp, content: @Composable () -> Unit) {
+    androidx.compose.ui.layout.Layout(content, modifier) { measurables, constraints ->
+        val space = gap.roundToPx()
+        val cellWidth = (constraints.maxWidth - space) / 2
+        val cellHeight = measurables.maxOfOrNull { it.maxIntrinsicHeight(cellWidth) } ?: 0
+        val cells = measurables.map { it.measure(androidx.compose.ui.unit.Constraints.fixed(cellWidth, cellHeight)) }
+        val rows = (cells.size + 1) / 2
+        layout(constraints.maxWidth, (rows * cellHeight + (rows - 1) * space).coerceAtLeast(0)) {
+            cells.forEachIndexed { i, cell -> cell.place((i % 2) * (cellWidth + space), (i / 2) * (cellHeight + space)) }
+        }
+    }
+}
+
+@Composable
+private fun QuickSites(actions: HomeActions, onYouTube: () -> Unit) {
     val sites = listOf("YouTube" to "https://m.youtube.com/", "Instagram" to "https://www.instagram.com/",
         "Facebook" to "https://m.facebook.com/", "TikTok" to "https://www.tiktok.com/")
     Row(Modifier.fillMaxWidth()) {
         sites.forEach { (name, url) ->
             Column(
-                Modifier.weight(1f).clip(RoundedCornerShape(16.dp)).pressable(scaleDown = 0.9f, onClick = { actions.openUrl(url) }).padding(vertical = 6.dp),
+                // YouTube is the app's own YouTube tab; the others open their websites.
+                Modifier.weight(1f).clip(RoundedCornerShape(16.dp))
+                    .pressable(scaleDown = 0.9f, onClick = { if (name == "YouTube") onYouTube() else actions.openUrl(url) }).padding(vertical = 6.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 BrandTile(name, size = 52.dp)
@@ -464,27 +493,6 @@ private fun FeedTab(vm: HomeViewModel, actions: HomeActions, onDownload: (MediaI
                     ) }
                 }
                 if (ui.loadingMore) item { FooterLoading() }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MusicTab(vm: HomeViewModel, actions: HomeActions, onDownload: (MediaItem) -> Unit) {
-    val ui by vm.music.collectAsStateWithLifecycle()
-    when {
-        ui.loading -> TilesSkeleton()
-        ui.error != null && ui.sections.isEmpty() -> ErrorBox(ui.error!!, vm::loadMusic)
-        else -> LazyColumn(contentPadding = PaddingValues(bottom = 24.dp + LocalBottomBarHeight.current)) {
-            items(ui.sections, key = { it.title }) { section ->
-                SectionHeader(section.title)
-                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    items(section.items, key = { it.url }) { item ->
-                        MediaTile(item, onClick = { actions.openItem(item) }, onDownload = {
-                            if (item.kind == ItemKind.VIDEO) onDownload(item) else actions.openItem(item)
-                        })
-                    }
-                }
             }
         }
     }

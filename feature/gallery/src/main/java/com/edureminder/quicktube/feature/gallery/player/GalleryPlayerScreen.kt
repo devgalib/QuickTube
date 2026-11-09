@@ -210,6 +210,13 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
 
     val delete = rememberDeleteAction(onDeleted = { if (ui.queue.size <= 1) onBack() else controller.next() })
     val favorite = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { vm.refreshFavorite() }
+    // Caption files saved beside this video (YouTube downloads come with one); off until chosen.
+    val savedCaptions = remember(current?.path) {
+        current?.path?.takeIf { it.isNotBlank() && !current.isAudio }?.let { com.edureminder.quicktube.core.common.SubtitleSidecars.find(java.io.File(it)) }.orEmpty()
+    }
+    var captionOn by remember(current?.path) { mutableStateOf<String?>(null) }
+    var captionStyleOpen by remember { mutableStateOf(false) }
+    if (captionStyleOpen) com.edureminder.quicktube.core.playerui.CaptionStyleSheet { captionStyleOpen = false }
     val subtitlePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         val name = uri.lastPathSegment.orEmpty().lowercase()
@@ -278,7 +285,8 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
             player, ui.aspect, ratio, zoom,
             Modifier.fillMaxSize().then(if (fitArea) Modifier.padding(top = status + TopBarHeight, bottom = nav + 36.dp) else Modifier),
         )
-        Subtitles(controller, Modifier.align(Alignment.BottomCenter).padding(bottom = if (controls) 200.dp else 48.dp))
+        // Captions in the user's caption style (the same as the YouTube player's).
+        com.edureminder.quicktube.core.playerui.CaptionOverlay(controller, fullscreen = true, avoidBottom = if (controls) 200.dp else 48.dp)
 
         val gestures = rememberGestureHandler(
             controller, state.durationMs, audio, window, zoom, feedback,
@@ -349,6 +357,15 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
             Sheet.SUBTITLE -> SubtitleSheet(
                 onSelect = { closeSheets(); subtitlePicker.launch(arrayOf("application/x-subrip", "text/vtt", "text/*", "application/octet-stream")) },
                 onDismiss = ::closeSheets,
+                saved = savedCaptions.map { (name, f) -> name to (f.path == captionOn) },
+                onStyle = { closeSheets(); captionStyleOpen = true },
+                onSaved = { i ->
+                    val f = i?.let { savedCaptions.getOrNull(it)?.second }
+                    captionOn = f?.path
+                    controller.setSubtitle(f?.let { android.net.Uri.fromFile(it) }, f?.let(com.edureminder.quicktube.core.common.SubtitleSidecars::mimeOf) ?: "text/vtt")
+                    closeSheets()
+                    say(if (f == null) "Subtitles off" else "Subtitles on")
+                },
             )
             Sheet.AUDIO_TRACK -> AudioTrackSheet(controller, ::closeSheets, sheetBack)
             Sheet.INFO -> if (current != null) InfoSheet(current, state.durationMs, ::closeSheets, sheetBack)
@@ -517,17 +534,6 @@ private fun BatteryClock() {
     }
 }
 
-/** Live subtitle text over the video. */
-@Composable
-private fun Subtitles(controller: PlayerController, modifier: Modifier) {
-    val text by controller.cues.collectAsStateWithLifecycle()
-    if (text.isNotBlank()) Text(
-        text, color = Color.White, fontSize = 17.sp,
-        modifier = modifier.padding(horizontal = 24.dp).clip(RoundedCornerShape(6.dp)).background(Color.Black.copy(alpha = 0.45f))
-            .padding(horizontal = 8.dp, vertical = 3.dp),
-        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-    )
-}
 
 /** What the gesture overlays show right now. */
 private class GestureFeedback {

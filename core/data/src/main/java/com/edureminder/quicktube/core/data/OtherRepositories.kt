@@ -28,7 +28,15 @@ internal class BrowserRepositoryImpl(
     private val bookmarkDao: BookmarkDao,
 ) : BrowserRepository {
     override val sites = siteDao.observe()
-        .onStart { if (siteDao.count() == 0) siteDao.insertAll(DEFAULT_SITES) }
+        .onStart {
+            if (siteDao.count() == 0) siteDao.insertAll(DEFAULT_SITES)
+            // Lists from before the built-in YouTube: add it on top and name the website "YouTube Web" (once; a
+            // user who deletes either later keeps it deleted).
+            else if (siteDao.countUrlOrName(YOUTUBE_URL, YOUTUBE_WEB) == 0) {
+                siteDao.renameBuiltIn(YOUTUBE_WEB_URL, YOUTUBE_WEB)
+                siteDao.insert(DEFAULT_SITES.first { it.url == YOUTUBE_URL })
+            }
+        }
         .map { list -> list.map { it.asModel() } }
     override val history = historyDao.observe().map { list -> list.map { it.asModel() } }
     override val bookmarks = bookmarkDao.observe().map { list -> list.map { it.asModel() } }
@@ -62,8 +70,13 @@ internal class BrowserRepositoryImpl(
 
     companion object {
         const val STATUS_SAVER_URL = "quicktube://status-saver"
+        /** The app's own YouTube (the YouTube tab), recommended over the website. */
+        const val YOUTUBE_URL = com.edureminder.quicktube.core.model.BUILT_IN_YOUTUBE_URL
+        private const val YOUTUBE_WEB_URL = "https://m.youtube.com/"
+        private const val YOUTUBE_WEB = "YouTube Web"
         val DEFAULT_SITES = listOf(
-            SiteEntity(name = "YouTube", url = "https://m.youtube.com/", builtIn = true, position = 0),
+            SiteEntity(name = "YouTube", url = YOUTUBE_URL, builtIn = true, position = -1),
+            SiteEntity(name = YOUTUBE_WEB, url = YOUTUBE_WEB_URL, builtIn = true, position = 0),
             SiteEntity(name = "Instagram", url = "https://www.instagram.com/", builtIn = true, position = 1),
             SiteEntity(name = "Facebook", url = "https://m.facebook.com/", builtIn = true, position = 2),
             SiteEntity(name = "TikTok", url = "https://www.tiktok.com/", builtIn = true, position = 3),

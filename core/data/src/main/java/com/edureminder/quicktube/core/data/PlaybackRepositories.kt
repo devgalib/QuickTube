@@ -13,7 +13,9 @@ internal class PlaybackHistoryRepositoryImpl(private val dao: PlayHistoryDao) : 
 
     override suspend fun all() = dao.all().map { it.asModel() }
 
-    override suspend fun save(key: String, title: String, positionMs: Long, durationMs: Long, opened: Boolean) {
+    override suspend fun save(
+        key: String, title: String, positionMs: Long, durationMs: Long, opened: Boolean, thumbnail: String?, uploader: String?,
+    ) {
         val old = dao.get(key)
         val now = System.currentTimeMillis()
         dao.upsert(
@@ -21,12 +23,14 @@ internal class PlaybackHistoryRepositoryImpl(private val dao: PlayHistoryDao) : 
                 itemKey = key, title = title.ifBlank { old?.title.orEmpty() }, positionMs = positionMs,
                 durationMs = if (durationMs > 0) durationMs else old?.durationMs ?: 0,
                 openedAt = if (opened || old == null) now else old.openedAt,
+                thumbnail = thumbnail ?: old?.thumbnail, uploader = uploader?.takeIf { it.isNotBlank() } ?: old?.uploader,
             ),
         )
         if (old == null) dao.trim(PlaybackHistoryRepository.MAX_ENTRIES)
     }
 
     override suspend fun clear() = dao.clear()
+    override suspend fun remove(keys: List<String>) = dao.delete(keys)
 }
 
 internal class SavedVideosRepositoryImpl(private val dao: SavedVideoDao) : SavedVideosRepository {

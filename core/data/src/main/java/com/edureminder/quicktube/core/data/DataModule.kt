@@ -8,7 +8,8 @@ import org.koin.dsl.module
 
 val dataModule = module {
     includes(databaseModule, datastoreModule, extractorModule)
-    single<MediaRepository> { MediaRepositoryImpl(get()) }
+    // yt-dlp (self-updating) stands in when NewPipe can't read a video; resolved lazily, it isn't bound in tests.
+    single<MediaRepository> { MediaRepositoryImpl(get()) { getKoin().getOrNull<com.edureminder.quicktube.core.extractor.UniversalExtractor>() } }
     single<LibraryRepository> { LibraryRepositoryImpl(get(), get()) }
     single<SettingsRepository> { SettingsRepositoryImpl(get()) }
     single<BrowserRepository> { BrowserRepositoryImpl(get(), get(), get()) }
@@ -16,5 +17,6 @@ val dataModule = module {
     single<GalleryRepository> { MediaStoreGalleryRepository(androidContext()) }
     single<PlaybackHistoryRepository> { PlaybackHistoryRepositoryImpl(get()) }
     single<SavedVideosRepository> { SavedVideosRepositoryImpl(get()) }
+    single<LocalPlaylistRepository> { LocalPlaylistRepositoryImpl(get(), get()) }
     single<GamesRepository> { RemoteConfigGamesRepository(androidContext()) }
 }

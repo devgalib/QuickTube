@@ -42,6 +42,58 @@ data class DownloadEntity(
     @ColumnInfo(defaultValue = "0") val extractAudio: Boolean = false,
     @ColumnInfo(defaultValue = "0") val clipStartMs: Long = 0,
     @ColumnInfo(defaultValue = "0") val clipEndMs: Long = 0,
+    /** A photo post with music made into a video: its pictures (JSON array of URLs); [url] is then the music. */
+    val slideImages: String? = null,
+)
+
+/** A bulk download: many links saved into one folder. */
+@Entity(tableName = "bulk_jobs")
+data class BulkJobEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val folder: String,
+    val createdAt: Long,
+    /** The quality picked for every link (a BatchQuality name). */
+    @ColumnInfo(defaultValue = "P720") val quality: String = "P720",
+)
+
+/** One link of a bulk download and what became of it. */
+@Entity(tableName = "bulk_items", indices = [Index("jobId")])
+data class BulkItemEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val jobId: Long,
+    val position: Int,
+    val link: String,
+    val title: String?,
+    /** PENDING, CHECKING, QUEUED, SKIPPED (already downloaded), FAILED, NOT_FOUND. */
+    val status: String,
+    val message: String?,
+    /** The download this link became (or the earlier one it matched); 0 = none. */
+    val downloadId: Long,
+)
+
+/** A playlist made in the app (videos or songs), played in order. */
+@Entity(tableName = "local_playlists")
+data class LocalPlaylistEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val isMusic: Boolean,
+    val createdAt: Long,
+    /** The YouTube playlist or channel it was imported from, if any. */
+    val source: String? = null,
+)
+
+@Entity(tableName = "local_playlist_items", indices = [Index("playlistId")])
+data class LocalPlaylistItemEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val playlistId: Long,
+    val position: Int,
+    val url: String,
+    val title: String,
+    val thumbnail: String?,
+    val uploader: String?,
+    val durationSec: Long,
+    val addedAt: Long,
 )
 
 fun DownloadEntity.asModel() = DownloadTask(
@@ -120,9 +172,12 @@ data class PlayHistoryEntity(
     val positionMs: Long,
     val durationMs: Long,
     val openedAt: Long,
+    /** Picture and channel, for the watch history list (online videos and songs). */
+    val thumbnail: String? = null,
+    val uploader: String? = null,
 )
 
-fun PlayHistoryEntity.asModel() = com.edureminder.quicktube.core.model.PlayHistoryEntry(itemKey, title, positionMs, durationMs, openedAt)
+fun PlayHistoryEntity.asModel() = com.edureminder.quicktube.core.model.PlayHistoryEntry(itemKey, title, positionMs, durationMs, openedAt, thumbnail, uploader)
 
 /** Videos saved with "Watch later", by page URL. */
 @Entity(tableName = "saved_videos", indices = [Index("savedAt")])

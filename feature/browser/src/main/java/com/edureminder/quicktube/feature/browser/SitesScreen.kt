@@ -31,6 +31,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import com.edureminder.quicktube.core.model.BUILT_IN_YOUTUBE_URL
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -79,8 +80,16 @@ fun SitesScreen(onBack: () -> Unit, onOpen: (String) -> Unit, onHistory: () -> U
                 ) {
                     SiteIcon(s.name, s.url)
                     Column(Modifier.weight(1f).padding(horizontal = 16.dp)) {
-                        Text(s.name, style = MaterialTheme.typography.bodyLarge)
-                        Text(if (s.url.startsWith("quicktube://")) "Built-in tool" else s.url, style = MaterialTheme.typography.bodySmall,
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(s.name, style = MaterialTheme.typography.bodyLarge)
+                            // The app's own YouTube is the one to use; the website ("YouTube Web") is there for signing in.
+                            if (s.url == BUILT_IN_YOUTUBE_URL) SiteTag("Recommended", MaterialTheme.colorScheme.primary)
+                        }
+                        Text(when {
+                            s.url == BUILT_IN_YOUTUBE_URL -> "Built into QuickTube"
+                            s.url.startsWith("quicktube://") -> "Built-in tool"
+                            else -> s.url
+                        }, style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     deleting?.let { d -> Checkbox(s.id in d, { _ -> deleting = if (s.id in d) d - s.id else d + s.id }) }
@@ -153,4 +162,14 @@ fun BookmarksScreen(onBack: () -> Unit, onOpen: (String) -> Unit) {
             }
         }
     }
+}
+
+/** A small label next to a site's name ("Recommended", "Web"). */
+@Composable
+private fun SiteTag(text: String, color: androidx.compose.ui.graphics.Color) {
+    Text(
+        text, style = MaterialTheme.typography.labelSmall, color = color,
+        modifier = Modifier.padding(start = 8.dp).clip(androidx.compose.foundation.shape.RoundedCornerShape(50))
+            .background(color.copy(alpha = 0.12f)).padding(horizontal = 8.dp, vertical = 2.dp),
+    )
 }

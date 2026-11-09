@@ -21,5 +21,6 @@ interface MediaExtractor {
     suspend fun details(url: String): VideoDetails
     suspend fun comments(url: String, page: Any? = null): Page<Comment>
     suspend fun channel(url: String, page: Any? = null): ChannelDetails
+    suspend fun channelTab(url: String, tab: com.edureminder.quicktube.core.model.ChannelTab, page: Any? = null): Page<MediaItem>
     suspend fun playlist(url: String, page: Any? = null): PlaylistDetails
 }

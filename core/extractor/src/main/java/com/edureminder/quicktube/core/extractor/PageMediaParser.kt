@@ -14,6 +14,10 @@ data class PageMedia(
     val thumbnail: String?,
     val durationSec: Double?,
     val candidates: List<StreamCandidate>,
+    /** A photo post (TikTok photo mode): its pictures, best size each, in order. */
+    val photos: List<String> = emptyList(),
+    /** The photo post's music, when it has one. */
+    val music: String? = null,
 )
 
 /**
@@ -35,6 +39,10 @@ object PageMediaParser {
                 out[u] = StreamCandidate(u, label?.let(::prettyLabel), h, remoteList, hls || StreamResolver.isPlaylistUrl(u))
             }
         }
+
+        // 0. A TikTok video page: its own item (caption, cover, length, stream), never the profile's or the feed's first video.
+        val tiktok = tikTokItem(html)
+        tiktok?.play?.takeIf { tiktok.images.isEmpty() }?.let { add(it, "HD") }
 
         // 1. Player configs with a quality list: "mediaDefinitions":[{"format":"mp4","videoUrl":"…","quality":"720"}, …]
         Regex(""""mediaDefinitions"\s*:\s*\[""").findAll(html).forEach { m ->
@@ -98,18 +106,60 @@ object PageMediaParser {
         add(jsonString(html, "video_url"))
         Regex(""""(?:hls|hlsUrl|hls_url|manifestUrl)"\s*:\s*"([^"]+\.m3u8[^"]*)"""").findAll(html).forEach { add(it.groupValues[1], hls = true) }
 
-        if (out.isEmpty()) return null
-        val duration = ldDuration
+        if (out.isEmpty() && tiktok?.images.isNullOrEmpty()) return null
+        val duration = tiktok?.durationSec ?: ldDuration
             ?: meta(html, "video:duration")?.toDoubleOrNull()
             ?: meta(html, "og:video:duration")?.toDoubleOrNull()
             ?: Regex(""""video_duration"\s*:\s*"?(\d{1,6})(?:\.\d+)?"?""").find(html)?.groupValues?.get(1)?.toDoubleOrNull()
-        val title = meta(html, "og:title") ?: ldTitle
+        val title = tiktok?.title ?: meta(html, "og:title") ?: ldTitle
             ?: Regex("<title[^>]*>([^<]*)</title>", RegexOption.IGNORE_CASE).find(html)?.groupValues?.get(1)?.trim()
         return PageMedia(
             title = title?.let(WebMediaFinder::decodeEntities),
-            thumbnail = (meta(html, "og:image") ?: ldThumb)?.let(WebMediaFinder::unescape),
+            thumbnail = tiktok?.cover ?: (meta(html, "og:image") ?: ldThumb)?.let(WebMediaFinder::unescape),
             durationSec = duration?.takeIf { it > 0 },
-            candidates = out.values.toList(),
+            candidates = if (tiktok?.images.isNullOrEmpty()) out.values.toList() else emptyList(),
+            photos = tiktok?.images.orEmpty(),
+            music = tiktok?.music,
+        )
+    }
+
+    /** A TikTok video page's own item: its caption ("by @user" when it has none), cover, length and stream. */
+    internal data class TikTokItem(
+        val title: String, val cover: String?, val durationSec: Double?, val play: String?,
+        /** Photo mode: the pictures, and the music played over them. */
+        val images: List<String> = emptyList(), val music: String? = null,
+    )
+
+    /** The desktop page's "webapp.video-detail" or the mobile page's "videoDetail" (its api-data script). */
+    private val TIKTOK_STATUS = Regex(""""(?:webapp\.video-detail|videoDetail)":\{"statusCode":(\d+)""")
+
+    /** TikTok's statuses for a video that is gone for good: removed / doesn't exist, private video, private account. */
+    private val TIKTOK_GONE = setOf(10204, 10216, 10222)
+
+    /**
+     * TikTok's page for a removed or private video still loads, with a status instead of the video. Other non-zero
+     * statuses are passing refusals (too many requests, a check): those are worth another try, not "removed".
+     */
+    fun tikTokGone(html: String): Boolean = TIKTOK_STATUS.find(html)?.groupValues?.get(1)?.toIntOrNull() in TIKTOK_GONE
+
+    internal fun tikTokItem(html: String): TikTokItem? {
+        val at = html.indexOf("\"itemStruct\":")
+        if (at < 0) return null
+        val obj = balanced(html, html.indexOf('{', at)) ?: return null
+        val item = runCatching { json.parseToJsonElement(obj) as JsonObject }.getOrNull() ?: return null
+        val video = item["video"] as? JsonObject
+        val author = (item["author"] as? JsonObject)?.str("uniqueId")
+        val desc = item.str("desc")?.replace(Regex("""\s+"""), " ")?.trim()?.takeIf { it.isNotEmpty() }
+        val kind = if (item["imagePost"] is JsonObject) "photo" else "video"
+        return TikTokItem(
+            title = desc ?: author?.let { "TikTok $kind by @$it" } ?: "TikTok $kind ${item.str("id").orEmpty()}".trim(),
+            cover = video?.str("cover") ?: video?.str("originCover"),
+            durationSec = (video?.get("duration") as? JsonPrimitive)?.contentOrNull?.toDoubleOrNull()?.takeIf { it > 0 },
+            play = video?.str("playAddr")?.takeIf { it.isNotBlank() } ?: video?.str("downloadAddr"),
+            images = ((item["imagePost"] as? JsonObject)?.get("images") as? JsonArray).orEmpty().mapNotNull { im ->
+                (((im as? JsonObject)?.get("imageURL") as? JsonObject)?.get("urlList") as? JsonArray)?.firstOrNull()?.jsonPrimitive?.contentOrNull
+            },
+            music = (item["music"] as? JsonObject)?.str("playUrl"),
         )
     }
 

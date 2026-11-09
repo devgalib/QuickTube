@@ -71,3 +71,31 @@ class InstagramReaderTest {
         assertNull(InstagramReader.parseEmbed("<html><body>Log in</body></html>"))
     }
 }
+
+class InstagramApiTest {
+    @org.junit.Test
+    fun shortcodeToMediaId() {
+        // A well-known pair: the shortcode is the id in Instagram's base 64.
+        org.junit.Assert.assertEquals("2582239940044490041", InstagramReader.mediaId("CPV9YtPLYU5"))
+    }
+
+    @org.junit.Test
+    fun photoCarouselWithSong() {
+        val json = """{"items":[{"media_type":8,"user":{"username":"nat"},"caption":{"text":"Sunset walk\nmore"},
+            "carousel_media":[
+              {"media_type":1,"image_versions2":{"candidates":[{"url":"https://cdn/p1.jpg","width":1080,"height":1350}]}},
+              {"media_type":2,"image_versions2":{"candidates":[{"url":"https://cdn/v.jpg"}]},"video_versions":[{"url":"https://cdn/v.mp4","width":720,"height":1280}]}
+            ],
+            "music_metadata":{"music_info":{"music_asset_info":{"progressive_download_url":"https://cdn/song.m4a"}}}}]}"""
+        val post = InstagramReader.parseApi(json)!!
+        org.junit.Assert.assertEquals("Sunset walk", post.title)
+        org.junit.Assert.assertEquals(listOf(false, true), post.items.map { it.isVideo })
+        org.junit.Assert.assertEquals("https://cdn/song.m4a", post.music)
+    }
+
+    @org.junit.Test
+    fun signedOutAnswerIsNotAPost() {
+        org.junit.Assert.assertNull(InstagramReader.parseApi("""{"message":"login_required","status":"fail"}"""))
+        org.junit.Assert.assertNull(InstagramReader.parseApi("<html>Login</html>"))
+    }
+}

@@ -5,6 +5,8 @@ plugins {
 dependencies {
     implementation(projects.core.common)
     implementation(projects.core.designsystem)
+    implementation(projects.core.data)
+    implementation(libs.koin.androidx.compose)
     api(projects.core.media)
     api(libs.androidx.media3.ui.compose)
     implementation(libs.androidx.activity.compose)

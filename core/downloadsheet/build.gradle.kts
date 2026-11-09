@@ -8,6 +8,7 @@ dependencies {
     implementation(projects.core.designsystem)
     implementation(projects.core.ui)
     implementation(projects.core.data)
+    implementation(projects.core.database)
     implementation(projects.core.download)
     implementation(projects.core.analytics)
     api(projects.core.extractor)

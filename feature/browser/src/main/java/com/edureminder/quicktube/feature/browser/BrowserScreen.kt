@@ -63,6 +63,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.ImeAction
@@ -107,11 +108,17 @@ private const val SNIFF_JS = """
    root.querySelectorAll('*').forEach(function(el){if(el.shadowRoot)walk(el.shadowRoot);});}
   walk(document);
   if(window.__qtSeen)window.__qtSeen.forEach(function(v){if(v.isConnected&&v.tagName==='VIDEO')all.add(v);});
+  // The video's own page (feeds and profiles show many videos under one address): the one post link around it.
+  var POST='a[href*="/video/"],a[href*="/photo/"],a[href*="/reel/"],a[href*="/reels/"],a[href*="/p/"],a[href*="/status/"]';
+  function link(v){try{var e=v;for(var i=0;i<12&&e;i++){if(e.tagName==='A'&&e.matches(POST))return e.href;
+   if(e.querySelectorAll){var a=e.querySelectorAll(POST),h=new Set();a.forEach(function(x){h.add(x.href.split('?')[0]);});
+    if(h.size===1)return a[0].href; if(h.size>1)return '';}
+   e=e.parentElement;}}catch(x){}return '';}
   all.forEach(function(v){ if(window.__qtSeen)window.__qtSeen.add(v);
    var r=v.getBoundingClientRect(), s=[];
    if(v.currentSrc)s.push(v.currentSrc); if(v.src)s.push(v.src);
    v.querySelectorAll('source').forEach(function(x){if(x.src)s.push(x.src);});
-   vids.push({s:s,u:!!v.__qtUser,p:!v.paused&&!v.ended,t:v.currentTime||0,d:isFinite(v.duration)?v.duration:-1,m:!!v.muted,l:!!v.loop,w:r.width||0,vw:vw,po:v.poster||''});
+   vids.push({s:s,u:!!v.__qtUser,p:!v.paused&&!v.ended,t:v.currentTime||0,d:isFinite(v.duration)?v.duration:-1,m:!!v.muted,l:!!v.loop,w:r.width||0,vw:vw,po:v.poster||'',k:link(v)});
   });
   function meta(p){var m=document.querySelector('meta[property="'+p+'"],meta[name="'+p+'"]');return m?m.content:null;}
   if(!vids.length&&window!==window.top)return;
@@ -156,6 +163,12 @@ private fun grabHtml(view: WebView, vm: BrowserViewModel) {
     }
 }
 
+/** Links to single posts / videos anywhere on the page (JSON array of strings). */
+private const val COLLECT_LINKS_JS = """(function(){var s=[],seen={};document.querySelectorAll('a[href]').forEach(function(a){
+var h=a.href;if(!/^https?:/.test(h))return;
+var one=/\/(video|photo)\/\d+|\/(p|reel|reels|tv)\/[A-Za-z0-9_-]{5,}|\/status\/\d+|\/shorts\/[A-Za-z0-9_-]{11}|[?&]v=[A-Za-z0-9_-]{11}|\/videos?\/\d+|\/video\/x[a-z0-9]+/.test(h);
+if(!one)return;var k=/[?&]v=/.test(h)?h:h.split('#')[0].split('?')[0];if(!seen[k]){seen[k]=1;s.push(k);}});return JSON.stringify(s);})()"""
+
 /**
  * Runs fetch() inside the page so requests carry the page's own cookies, origin and TLS session —
  * used for quality lists and playlists that refuse requests from outside the browser.
@@ -169,12 +182,16 @@ private class PageFetcher {
         pending.remove(id)?.complete(text)
     }
 
-    suspend fun fetch(url: String): String? {
+    suspend fun fetch(url: String): String? = fetchWith(url, emptyMap())
+
+    /** [fetch] with request headers (an API that only answers its own web app). */
+    suspend fun fetchWith(url: String, headers: Map<String, String>): String? {
         val view = webView ?: return null
         val id = java.util.UUID.randomUUID().toString()
         val d = kotlinx.coroutines.CompletableDeferred<String?>()
         pending[id] = d
-        val js = "fetch(" + org.json.JSONObject.quote(url) + ",{credentials:'include'}).then(function(r){return r.ok?r.text():null})" +
+        val js = "fetch(" + org.json.JSONObject.quote(url) + ",{credentials:'include',headers:" + org.json.JSONObject(headers) + "})" +
+            ".then(function(r){return r.ok?r.text():null})" +
             ".then(function(t){QtFetch.fetchResult('" + id + "',t)}).catch(function(){QtFetch.fetchResult('" + id + "',null)});"
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { view.evaluateJavascript(js, null) }
         return kotlinx.coroutines.withTimeoutOrNull(15_000) { d.await() }.also { pending.remove(id) }
@@ -194,22 +211,33 @@ fun BrowserScreen(
     silent: Boolean = false,
     /** Separates browser states that open the same URL (each share gets a fresh one). */
     stateKey: String = startUrl,
+    /** "Download all on this page": a bulk download of these links, in a folder of this name. */
+    onBulk: ((name: String, links: List<String>) -> Unit)? = null,
 ) {
     val vm = koinViewModel<BrowserViewModel>(key = stateKey)
     val fetcher = remember { PageFetcher() }
-    LaunchedEffect(Unit) { vm.autoDownload = autoDownload; vm.pageFetch = fetcher::fetch; vm.recordHistory = !silent }
+    LaunchedEffect(Unit) { vm.autoDownload = autoDownload; vm.pageFetch = fetcher::fetch; vm.apiFetch = fetcher::fetchWith; vm.recordHistory = !silent }
     val ui by vm.ui.collectAsStateWithLifecycle()
     val saved by vm.bookmarked.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val koinPlayer = koinInject<com.edureminder.quicktube.core.media.PlayerController>()
     var webView by remember { mutableStateOf<WebView?>(null) }
     var editing by remember { mutableStateOf(false) }
-    var address by remember { mutableStateOf("") }
+    var address by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue("")) }
+    // Tapping the address edits it at once: keyboard up, the old address selected so typing replaces it.
+    val addressFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    LaunchedEffect(editing) { if (editing) runCatching { addressFocus.requestFocus() } }
     var menu by remember { mutableStateOf(false) }
     var customView by remember { mutableStateOf<View?>(null) }
+    // "Continue with Google/Facebook…" opens its sign-in page in a window of its own, shown over the page.
+    var signIn by remember { mutableStateOf<WebView?>(null) }
+    val signInWindows = remember { SignInWindows(context) { signIn = it } }
     val openVideo by rememberUpdatedState(onOpenVideo)
 
-    val isNative = YT_WATCH.containsMatchIn(ui.url)
+    // Pages whose address names one video that a native reader can read by itself (Dailymotion covers its
+    // player with a sign-up wall in the WebView, so nothing ever plays there; Bilibili's player waits for a tap).
+    val isNative = YT_WATCH.containsMatchIn(ui.url) || com.edureminder.quicktube.core.extractor.DailymotionReader.videoId(ui.url) != null ||
+        com.edureminder.quicktube.core.extractor.BilibiliReader.videoId(ui.url) != null
     // Only when the user is on a video and it is playing — never on listing/home pages.
     // Instagram posts offer their photos too, so the button shows before (or without) any video playing.
     val canDownload = isNative || ui.mainVideo != null || ui.pageMedia != null ||
@@ -239,12 +267,12 @@ fun BrowserScreen(
                 QtIconButton(QtIcons.Close, "Close", onClose)
                 if (editing) {
                     TextField(
-                        address, { address = it }, Modifier.weight(1f), singleLine = true,
+                        address, { address = it }, Modifier.weight(1f).focusRequester(addressFocus), singleLine = true,
                         shape = RoundedCornerShape(50),
                         colors = TextFieldDefaults.colors(focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
                         keyboardActions = KeyboardActions(onGo = {
-                            val t = address.trim()
+                            val t = address.text.trim()
                             webView?.loadUrl(if (Urls.looksLikeUrl(t)) Urls.normalize(t) else Urls.googleSearch(t))
                             editing = false
                         }),
@@ -252,7 +280,7 @@ fun BrowserScreen(
                 } else {
                     Row(
                         Modifier.weight(1f).padding(vertical = 8.dp).clip(RoundedCornerShape(50)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                            .pressable(scaleDown = 0.98f, onClick = { address = ui.url; editing = true }).padding(horizontal = 14.dp, vertical = 7.dp),
+                            .pressable(scaleDown = 0.98f, onClick = { address = androidx.compose.ui.text.input.TextFieldValue(ui.url, androidx.compose.ui.text.TextRange(0, ui.url.length)); editing = true }).padding(horizontal = 14.dp, vertical = 7.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(if (ui.url.startsWith("https")) QtIcons.Lock else QtIcons.Public, null, Modifier.size(15.dp),
@@ -272,6 +300,18 @@ fun BrowserScreen(
                         DropdownMenuItem(text = { Text(if (saved) "Saved" else "Save page") }, leadingIcon = {
                             Icon(if (saved) QtIcons.Bookmark else QtIcons.BookmarkBorder, null)
                         }, onClick = { vm.toggleBookmark(); menu = false })
+                        if (onBulk != null) DropdownMenuItem(text = { Text("Download all on this page") }, leadingIcon = { Icon(QtIcons.Checklist, null) }, onClick = {
+                            menu = false
+                            // Every post the page lists (a profile's grid, a feed, a playlist), one link each: a bulk download.
+                            webView?.evaluateJavascript(COLLECT_LINKS_JS) { result ->
+                                val links = runCatching {
+                                    val arr = org.json.JSONArray(org.json.JSONTokener(result).nextValue() as String)
+                                    (0 until arr.length()).map { arr.getString(it) }
+                                }.getOrDefault(emptyList()).filter { Urls.namesOneMedia(it) }.distinct()
+                                if (links.isEmpty()) Toast.makeText(context, "No videos or posts found on this page", Toast.LENGTH_SHORT).show()
+                                else onBulk(ui.title.substringBefore(" | ").substringBefore(" - ").trim().take(60), links)
+                            }
+                        })
                         DropdownMenuItem(text = { Text("Saved pages") }, leadingIcon = { Icon(QtIcons.Collections, null) },
                             onClick = { menu = false; onOpenBookmarks() })
                         DropdownMenuItem(text = { Text("History") }, leadingIcon = { Icon(QtIcons.History, null) },
@@ -297,8 +337,7 @@ fun BrowserScreen(
                 factory = { ctx ->
                     WebView(ctx).apply {
                         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
+                        applyBrowserSettings()
                         settings.mediaPlaybackRequiresUserGesture = false
                         settings.loadWithOverviewMode = true
                         settings.useWideViewPort = true
@@ -308,9 +347,8 @@ fun BrowserScreen(
                         // Ad scripts open pop-ups/pop-unders on any tap; only real links the user tapped may open.
                         settings.javaScriptCanOpenWindowsAutomatically = false
                         settings.setSupportMultipleWindows(true)
-                        // Sign-ins (Facebook, Instagram…) live in the WebView's own cookie store; QuickTube never sees passwords.
-                        CookieManager.getInstance().setAcceptCookie(true)
-                        CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                        // Sign-ins (Facebook, Instagram…) live in the WebView's own cookie store (applyBrowserSettings);
+                        // QuickTube never sees passwords.
                         // Run the detector in every frame (embedded players live in iframes) from the very start.
                         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                             WebViewCompat.addDocumentStartJavaScript(this, SNIFF_JS, setOf("*"))
@@ -331,6 +369,7 @@ fun BrowserScreen(
                                         playing = v.optBoolean("p"), currentTime = v.optDouble("t", 0.0), duration = v.optDouble("d", -1.0),
                                         muted = v.optBoolean("m"), loop = v.optBoolean("l"), width = v.optDouble("w", 0.0),
                                         viewportWidth = v.optDouble("vw", 0.0), poster = v.optString("po").ifBlank { null },
+                                        link = v.optString("k").ifBlank { null },
                                     )
                                 }
                                 val title = o.optString("t").ifBlank { null }
@@ -342,6 +381,7 @@ fun BrowserScreen(
                         }, "QtSniffer")
                         addJavascriptInterface(fetcher, "QtFetch")
                         fetcher.webView = this
+                        vm.openPage = { u -> post { loadUrl(u) } }
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                                 val u = request.url.toString()
@@ -406,12 +446,13 @@ fun BrowserScreen(
                             override fun onProgressChanged(view: WebView, newProgress: Int) = vm.onProgress(newProgress, view.canGoBack())
 
                             override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: android.os.Message?): Boolean {
-                                // target=_blank links the user tapped open here; script pop-ups are dropped.
+                                // target=_blank links the user tapped open here; a window a tapped button opens is
+                                // kept only while it is a sign-in page (SignInWindows); other script pop-ups are dropped.
                                 val hit = view.hitTestResult
                                 val link = if (isUserGesture && (hit.type == WebView.HitTestResult.SRC_ANCHOR_TYPE ||
                                         hit.type == WebView.HitTestResult.SRC_IMAGE_ANCHOR_TYPE)) hit.extra else null
-                                if (link != null && link.startsWith("http")) view.loadUrl(link)
-                                return false
+                                if (link != null && link.startsWith("http") && !isSignInUrl(link)) { view.loadUrl(link); return false }
+                                return !silent && isUserGesture && signInWindows.open(resultMsg)
                             }
                             override fun onShowCustomView(view: View, callback: CustomViewCallback) {
                                 val decor = ctx.findActivity()?.window?.decorView as? FrameLayout ?: return
@@ -443,7 +484,7 @@ fun BrowserScreen(
                     Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer).padding(horizontal = 16.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    val d = ui.pageMedia?.durationSec ?: ui.mainVideo?.duration?.takeIf { it > 0 }
+                    val d = ui.mainVideo?.duration?.takeIf { it > 0 && it.isFinite() } ?: ui.pageMedia?.durationSec
                     Column(Modifier.weight(1f)) {
                         val instagramPost = ui.mainVideo == null && ui.pageMedia == null &&
                             com.edureminder.quicktube.core.extractor.InstagramReader.shortcode(ui.url) != null
@@ -458,15 +499,20 @@ fun BrowserScreen(
             }
             Spacer(Modifier.navigationBarsPadding())
         }
+        // Closed by hand: the page reloads so a sign-in that finished in the window shows.
+        signIn?.let { w -> SignInOverlay(w, onClose = { signInWindows.close(); webView?.reload() }) }
     }
 
     // Leaving the browser or the app keeps the sessions too.
     androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_STOP) { CookieManager.getInstance().flush() }
     DisposableEffect(Unit) {
         onDispose {
+            signInWindows.close()
             CookieManager.getInstance().flush()
             fetcher.webView = null
             vm.pageFetch = null
+            vm.apiFetch = null
+            vm.openPage = null
             webView?.run { stopLoading(); destroy() }
         }
     }

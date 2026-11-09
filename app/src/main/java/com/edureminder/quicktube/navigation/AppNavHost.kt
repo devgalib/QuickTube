@@ -112,7 +112,14 @@ fun AppNavHost(nav: NavHostController) {
     val dest = backStack?.destination
     val onTab = tabs.any { t -> dest?.hierarchy?.any { it.hasRoute(t.route::class) } == true }
     // A gallery video is already on screen (its own player or picture-in-picture); gallery audio reopens that player.
-    val playing by koinInject<com.edureminder.quicktube.core.media.PlayerController>().state.collectAsStateWithLifecycle()
+    val player = koinInject<com.edureminder.quicktube.core.media.PlayerController>()
+    val playHistory = koinInject<com.edureminder.quicktube.core.data.PlaybackHistoryRepository>()
+    val watchProgress by remember(playHistory) {
+        playHistory.entries.map { list ->
+            list.mapNotNull { e -> com.edureminder.quicktube.core.common.Urls.youtubeVideoId(e.pageUrl)?.let { it to e.progress } }.toMap()
+        }
+    }.collectAsStateWithLifecycle(emptyMap())
+    val playing by player.state.collectAsStateWithLifecycle()
     val galleryId = playing.current?.id?.takeIf { it.startsWith("gallery:") }?.removePrefix("gallery:")?.toLongOrNull()
     val galleryVideo = galleryId != null && !playing.audioOnly
     // The floating window is showing the video instead.
@@ -126,7 +133,15 @@ fun AppNavHost(nav: NavHostController) {
         library.downloads.map { l -> l.count { it.status != DownloadStatus.COMPLETED && it.deletedAt == 0L } }
     }.collectAsStateWithLifecycle(0)
 
-    fun openUrl(url: String) = nav.navigate(router.routeFor(url))
+    fun openUrl(url: String) {
+        // The built-in YouTube (Sites list) is the Home screen's YouTube tab, not a web page.
+        if (url == com.edureminder.quicktube.core.model.BUILT_IN_YOUTUBE_URL) {
+            com.edureminder.quicktube.core.navigation.HomeTabs.show(com.edureminder.quicktube.core.navigation.HomeTabs.YOUTUBE)
+            if (!nav.popBackStack<HomeRoute>(inclusive = false)) nav.navigate(HomeRoute) { launchSingleTop = true }
+            return
+        }
+        nav.navigate(router.routeFor(url))
+    }
     fun downloadUrl(url: String) = nav.navigate(router.routeForPasted(url))
     fun openItem(item: MediaItem) = nav.navigate(
         when (item.kind) {
@@ -148,7 +163,11 @@ fun AppNavHost(nav: NavHostController) {
     Box(Modifier.fillMaxSize()) {
         // Tab screens draw behind the floating bar (and see their content through the gaps around it);
         // other screens simply stop above the mini player.
-        CompositionLocalProvider(LocalBottomBarHeight provides if (onTab) overlayHeight else 0.dp, LocalBottomBarHidden provides barHidden) {
+        CompositionLocalProvider(
+            LocalBottomBarHeight provides if (onTab) overlayHeight else 0.dp, LocalBottomBarHidden provides barHidden,
+            // Red "watched" bars on YouTube thumbnails everywhere, from the watch history.
+            com.edureminder.quicktube.core.ui.LocalWatchProgress provides watchProgress,
+        ) {
         NavHost(
             nav, startDestination = HomeRoute,
             // Above the mini player on other screens; that space already covers the navigation bar, so screens' own
@@ -174,6 +193,11 @@ fun AppNavHost(nav: NavHostController) {
                         openUrl = ::openUrl,
                         downloadUrl = ::downloadUrl,
                         openItem = ::openItem,
+                        openWatchHistory = { nav.navigate(com.edureminder.quicktube.core.navigation.WatchHistoryRoute) },
+                        playMusic = { songs, index ->
+                            player.play(songs.map { com.edureminder.quicktube.core.media.OnlineAudio.item(it.url, it.title, it.uploader, it.thumbnail) }, index, audioOnly = true)
+                            nav.navigate(PlayerRoute) { launchSingleTop = true }
+                        },
                         openChannel = { nav.navigate(ChannelRoute(it)) },
                         openHowTo = { nav.navigate(HowToRoute(it)) },
                         openSites = { nav.navigate(SitesRoute) },
@@ -186,6 +210,9 @@ fun AppNavHost(nav: NavHostController) {
                         },
                         openVault = { nav.navigate(VaultRoute) },
                         openGames = { nav.navigate(GamesRoute) },
+                        openBulk = { nav.navigate(BulkRoute()) },
+                        openPlaylists = { music -> nav.navigate(LocalPlaylistsRoute(music)) },
+                        openLocalPlaylist = { id -> nav.navigate(LocalPlaylistRoute(id)) },
                     ),
                     Modifier.statusBarsPadding(),
                 )
@@ -291,15 +318,52 @@ fun AppNavHost(nav: NavHostController) {
                     onPlayNext = { item -> nav.navigate(VideoRoute(item.url, item.title.ifBlank { null }, item.thumbnail)) { popUpTo<VideoRoute> { inclusive = true } } })
             }
             composable<SavedVideosRoute> { SavedVideosScreen(nav::popBackStack, onOpen = ::openItem) }
+            composable<com.edureminder.quicktube.core.navigation.WatchHistoryRoute> {
+                com.edureminder.quicktube.feature.video.WatchHistoryScreen(nav::popBackStack, onOpen = ::openItem)
+            }
             composable<ChannelRoute> { e -> ListPageScreen(e.toRoute<ChannelRoute>().url, true, nav::popBackStack, ::openItem) }
             composable<PlaylistRoute> { e -> ListPageScreen(e.toRoute<PlaylistRoute>().url, false, nav::popBackStack, ::openItem) }
             composable<GamesRoute> { GamesScreen(nav::popBackStack) }
+            composable<BulkRoute> { e ->
+                val r = e.toRoute<BulkRoute>()
+                com.edureminder.quicktube.feature.home.BulkScreen(r.text, r.name, nav::popBackStack,
+                    onOpenJob = { id -> nav.navigate(BulkJobRoute(id)) { popUpTo<BulkRoute> { inclusive = false } } })
+            }
+            composable<LocalPlaylistsRoute> { e ->
+                com.edureminder.quicktube.feature.video.LocalPlaylistsScreen(e.toRoute<LocalPlaylistsRoute>().music, nav::popBackStack,
+                    onOpen = { id -> nav.navigate(LocalPlaylistRoute(id)) })
+            }
+            composable<LocalPlaylistRoute> { e ->
+                com.edureminder.quicktube.feature.video.LocalPlaylistScreen(
+                    e.toRoute<LocalPlaylistRoute>().id, nav::popBackStack,
+                    onPlay = { list, items, index ->
+                        if (list.isMusic) {
+                            player.play(items.map { com.edureminder.quicktube.core.media.OnlineAudio.item(it.url, it.title, it.uploader, it.thumbnail) }, index, audioOnly = true)
+                            nav.navigate(PlayerRoute) { launchSingleTop = true }
+                        } else {
+                            // The video page plays the rest of the playlist one after another.
+                            com.edureminder.quicktube.core.navigation.VideoQueue.start(list.name, items)
+                            val v = items[index]
+                            nav.navigate(VideoRoute(v.url, v.title.ifBlank { null }, v.thumbnail))
+                        }
+                    },
+                    onDownloadAll = { name, links -> nav.navigate(BulkRoute(links.joinToString("\n"), name)) },
+                )
+            }
+            composable<BulkJobRoute> { e ->
+                com.edureminder.quicktube.feature.home.BulkJobScreen(e.toRoute<BulkJobRoute>().id, nav::popBackStack,
+                    onOpenLink = ::openUrl, onOpenDownloads = { nav.navigate(DownloadingRoute) })
+            }
             composable<HowToRoute> { e ->
                 HowToScreen(e.toRoute<HowToRoute>().platform, nav::popBackStack, openInBrowser = ::openUrl,
                     openStatusSaver = { nav.navigate(StatusSaverRoute) })
             }
             composable<DownloadingRoute> { DownloadingScreen(nav::popBackStack) }
-            composable<PlayerRoute> { PlayerScreen(onBack = nav::popBackStack, onPip = { FloatingPlayerActivity.start(context) }) }
+            composable<PlayerRoute> {
+                // Songs get the music player; videos and files the video player.
+                if (com.edureminder.quicktube.core.media.OnlineAudio.isMusic(playing.current)) com.edureminder.quicktube.feature.player.MusicPlayerScreen(onBack = nav::popBackStack)
+                else PlayerScreen(onBack = nav::popBackStack, onPip = { FloatingPlayerActivity.start(context) })
+            }
             composable<BrowserRoute> { e ->
                 val r = e.toRoute<BrowserRoute>()
                 BrowserScreen(
@@ -309,6 +373,7 @@ fun AppNavHost(nav: NavHostController) {
                     onOpenVideo = { nav.navigate(VideoRoute(it)) },
                     onOpenHistory = { nav.navigate(BrowserHistoryRoute) },
                     onOpenBookmarks = { nav.navigate(BookmarksRoute) },
+                    onBulk = { name, links -> nav.navigate(BulkRoute(links.joinToString("\n"), name)) },
                 )
             }
             composable<SitesRoute> { SitesScreen(nav::popBackStack, onOpen = ::openUrl, onHistory = { nav.navigate(BrowserHistoryRoute) }) }

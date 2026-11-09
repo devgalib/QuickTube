@@ -12,8 +12,9 @@ import org.koin.dsl.module
     entities = [
         DownloadEntity::class, SiteEntity::class, HistoryEntity::class, BookmarkEntity::class, SearchQueryEntity::class,
         DeletedHistoryEntity::class, PlayHistoryEntity::class, SavedVideoEntity::class,
+        BulkJobEntity::class, BulkItemEntity::class, LocalPlaylistEntity::class, LocalPlaylistItemEntity::class,
     ],
-    version = 6,
+    version = 9,
     exportSchema = false,
 )
 abstract class QuickTubeDatabase : RoomDatabase() {
@@ -25,6 +26,8 @@ abstract class QuickTubeDatabase : RoomDatabase() {
     abstract fun deletedHistoryDao(): DeletedHistoryDao
     abstract fun playHistoryDao(): PlayHistoryDao
     abstract fun savedVideoDao(): SavedVideoDao
+    abstract fun bulkDao(): BulkDao
+    abstract fun localPlaylistDao(): LocalPlaylistDao
 }
 
 /** v2: downloads can be HLS playlists. */
@@ -77,14 +80,48 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE play_history ADD COLUMN thumbnail TEXT")
+        db.execSQL("ALTER TABLE play_history ADD COLUMN uploader TEXT")
+    }
+}
+
+val MIGRATION_7_8 = object : Migration(7, 8) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE downloads ADD COLUMN slideImages TEXT")
+        db.execSQL("CREATE TABLE IF NOT EXISTS `bulk_jobs` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `folder` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `bulk_items` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `jobId` INTEGER NOT NULL, `position` INTEGER NOT NULL, " +
+                "`link` TEXT NOT NULL, `title` TEXT, `status` TEXT NOT NULL, `message` TEXT, `downloadId` INTEGER NOT NULL)",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_bulk_items_jobId` ON `bulk_items` (`jobId`)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS `local_playlists` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `isMusic` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL)")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `local_playlist_items` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `playlistId` INTEGER NOT NULL, `position` INTEGER NOT NULL, " +
+                "`url` TEXT NOT NULL, `title` TEXT NOT NULL, `thumbnail` TEXT, `uploader` TEXT, `durationSec` INTEGER NOT NULL, `addedAt` INTEGER NOT NULL)",
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_local_playlist_items_playlistId` ON `local_playlist_items` (`playlistId`)")
+    }
+}
+
+val MIGRATION_8_9 = object : Migration(8, 9) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE bulk_jobs ADD COLUMN quality TEXT NOT NULL DEFAULT 'P720'")
+        db.execSQL("ALTER TABLE local_playlists ADD COLUMN source TEXT")
+    }
+}
+
 val databaseModule = module {
     single {
         Room.databaseBuilder(androidContext(), QuickTubeDatabase::class.java, "quicktube.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
             .fallbackToDestructiveMigrationOnDowngrade(true)
             .build()
     }
     single { get<QuickTubeDatabase>().downloadDao() }
+    single { get<QuickTubeDatabase>().bulkDao() }
+    single { get<QuickTubeDatabase>().localPlaylistDao() }
     single { get<QuickTubeDatabase>().siteDao() }
     single { get<QuickTubeDatabase>().historyDao() }
     single { get<QuickTubeDatabase>().bookmarkDao() }

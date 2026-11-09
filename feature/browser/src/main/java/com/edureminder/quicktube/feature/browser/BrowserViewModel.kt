@@ -1,6 +1,7 @@
 package com.edureminder.quicktube.feature.browser
 
 import androidx.lifecycle.ViewModel
+import com.edureminder.quicktube.core.common.Urls
 import androidx.lifecycle.viewModelScope
 import com.edureminder.quicktube.core.data.BrowserRepository
 import com.edureminder.quicktube.core.downloadsheet.DownloadSheetController
@@ -40,6 +41,8 @@ data class PageVideo(
     val width: Double,
     val viewportWidth: Double,
     val poster: String?,
+    /** The video's own page (/video/…, /reel/…, /p/…) when it plays inside a feed or profile; null otherwise. */
+    val link: String? = null,
 )
 
 data class BrowserUi(
@@ -65,6 +68,8 @@ class BrowserViewModel(
     private val currentUrl = MutableStateFlow("")
     /** Fetch through the open page (set by the screen while the WebView is alive). */
     var pageFetch: (suspend (String) -> String?)? = null
+    /** [pageFetch] with request headers. */
+    var apiFetch: (suspend (String, Map<String, String>) -> String?)? = null
 
     /** The WebView's own User-Agent; media servers often check it matches the session's cookies. */
     var userAgent: String? = null
@@ -88,6 +93,9 @@ class BrowserViewModel(
     /** New page: forget the previous page's video, keep only requests from the last moments (SPA navigations). */
     private fun onNavigated(url: String) {
         currentUrl.value = url
+        // The automatic download is for the shared link's own page: once the user (or the page) goes elsewhere —
+        // a reel or feed video under a photo post — it would take that video instead.
+        if (autoPage != null && pathOf(url) != autoPage) autoDownload = false
         _ui.update { s ->
             if (s.url.substringBefore('#') == url.substringBefore('#')) s.copy(url = url)
             else {
@@ -102,6 +110,8 @@ class BrowserViewModel(
     var recordHistory = true
 
     fun onPageFinished(url: String, title: String?) {
+        // Redirects (a share link → the post) are done by now: this is the page the link stands for.
+        if (autoDownload && autoPage == null && !isRedirector(url)) autoPage = pathOf(url)
         _ui.update { it.copy(title = title.orEmpty()) }
         if (recordHistory) viewModelScope.launch { repo.recordVisit(title.orEmpty(), url) }
         // Shared or pasted Instagram post: its photos and videos come from the post itself, no need to wait for playback.
@@ -122,11 +132,17 @@ class BrowserViewModel(
     private suspend fun openInstagram(url: String): Boolean {
         val code = InstagramReader.shortcode(url) ?: return false
         val fetch = pageFetch ?: return false
-        val post = fetch(InstagramReader.embedUrl(code))?.let { html ->
+        // Signed in: the app's own API has every item at full size and a photo post's song. Signed out: the embed page.
+        val post = apiFetch?.invoke(InstagramReader.apiUrl(code), InstagramReader.API_HEADERS)?.let { json ->
+            withContext(Dispatchers.Default) { InstagramReader.parseApi(json) }
+        } ?: fetch(InstagramReader.embedUrl(code))?.let { html ->
             withContext(Dispatchers.Default) { InstagramReader.parseEmbed(html) }
         } ?: return false
         val single = post.items.size == 1
-        val options = post.items.mapIndexed { i, item ->
+        val photos = post.items.filter { !it.isVideo }.map { it.url }
+        // Photos with a song: also as one video with that song, the way Instagram plays them.
+        val slideshow = post.music?.takeIf { photos.isNotEmpty() }?.let { com.edureminder.quicktube.core.downloadsheet.photoPostOptions(photos, it).first() }
+        val options = listOfNotNull(slideshow) + post.items.mapIndexed { i, item ->
             val n = if (single) "" else " ${i + 1}"
             val size = if (item.width > 0 && item.height > 0) "${item.width} × ${item.height}" else ""
             if (item.isVideo) DownloadOption(
@@ -202,6 +218,16 @@ class BrowserViewModel(
 
     /** Set when the browser was opened from a pasted/shared link: show the download sheet as soon as possible, once. */
     var autoDownload = false
+
+    /** Path of the page the shared link opened (after redirects); null until it has loaded. */
+    private var autoPage: String? = null
+
+    /** Short links that only send the browser on to the real page. */
+    private fun isRedirector(url: String) = pathOf(url).let { p ->
+        "/share/" in "$p/" || listOf("fb.watch", "l.facebook.com", "lm.facebook.com", "youtu.be", "t.co", "vt.tiktok.com", "vm.tiktok.com").any { p.startsWith("$it/") || p == it }
+    }
+
+    private fun pathOf(url: String) = runCatching { java.net.URI(url).let { "${it.host?.removePrefix("www.")?.removePrefix("m.")}${it.path?.trimEnd('/')}" } }.getOrDefault(url)
     private var autoDone = false
 
     private fun maybeAutoDownload() {
@@ -226,10 +252,33 @@ class BrowserViewModel(
         downloadPlaying(isNativePage)
     }
 
+    /** Opens a page in the WebView (set by the screen). */
+    var openPage: ((String) -> Unit)? = null
+
     private fun downloadPlaying(isNativePage: Boolean) {
         val s = _ui.value
         val main = s.mainVideo
-        val declared = s.pageMedia
+        // A video playing in a feed or profile (TikTok, Instagram…): the page's data and title belong to the whole page,
+        // so open the video's own page and download from there, as for a shared link.
+        val own = main?.link?.takeIf { !Urls.namesOneMedia(s.url) && Urls.namesOneMedia(it) && Urls.host(it) == Urls.host(s.url) }
+        val open = openPage
+        if (own != null && open != null && !isNativePage) {
+            autoDownload = true; autoDone = false; autoPage = null; instagramFailed = null
+            open(own)
+            return
+        }
+        // Facebook's page data lists the first post it loaded, not the reel or feed video being watched now
+        // (reels are a reel's own address: the sheet reads that post directly).
+        val declared = s.pageMedia.takeUnless { com.edureminder.quicktube.core.extractor.FacebookReader.isFacebook(s.url) }
+        // A photo post (TikTok photo mode): its photos, plus a video of them with the post's music.
+        if (declared != null && declared.photos.isNotEmpty()) {
+            sheet.openDirect(SheetTarget.Direct(
+                title = declared.title?.takeIf { it.isNotBlank() } ?: s.title, thumbnail = declared.thumbnail ?: declared.photos.first(),
+                pageUrl = s.url, options = com.edureminder.quicktube.core.downloadsheet.photoPostOptions(declared.photos, declared.music),
+                headers = sessionHeaders(declared.photos.first()), items = true,
+            ))
+            return
+        }
         if (isNativePage || main == null && declared == null) {
             sheet.open(s.url)
             return
@@ -238,14 +287,21 @@ class BrowserViewModel(
         val playing = direct.map { StreamCandidate(it) }
         // Streams the page actually loaded: always offered as a fallback (newest first) in case declared data is stale or blocked.
         val sniffed = s.sniffed.reversed().map { StreamCandidate(it.url) }
-        val candidates = (declared?.candidates.orEmpty() + playing + sniffed).distinctBy { it.url }
+        // A feed video without a page of its own (a TikTok ad, a sponsored clip): the page's data is the feed's first
+        // post, so the file the playing video uses comes first.
+        val feedOnly = main != null && playing.isNotEmpty() && !Urls.namesOneMedia(s.url)
+        val candidates = (if (feedOnly) playing + declared?.candidates.orEmpty() + sniffed else declared?.candidates.orEmpty() + playing + sniffed)
+            .distinctBy { it.url }
         sheet.openDirect(
             SheetTarget.Sniffed(
-                title = declared?.title?.takeIf { it.isNotBlank() } ?: s.title.ifBlank { "video" },
+                // The page's title and picture are its first post's: not this feed video's.
+                title = declared?.title?.takeIf { it.isNotBlank() && !feedOnly } ?: s.title.ifBlank { "video" },
                 pageUrl = s.url,
-                thumbnail = declared?.thumbnail ?: main?.poster?.takeIf { it.startsWith("http") } ?: s.pageImage,
+                thumbnail = (if (feedOnly) main?.poster?.takeIf { it.startsWith("http") } else null)
+                    ?: declared?.thumbnail ?: main?.poster?.takeIf { it.startsWith("http") } ?: s.pageImage,
                 candidates = candidates,
-                durationSec = declared?.durationSec ?: main?.duration?.takeIf { it > 0 },
+                // The video playing first: on feeds (Facebook) the page's declared data can belong to another post.
+                durationSec = main?.duration?.takeIf { it > 0 && it.isFinite() } ?: declared?.durationSec,
                 headers = sessionHeaders(candidates.firstOrNull()?.url ?: s.url),
                 pageFetch = pageFetch,
             ),

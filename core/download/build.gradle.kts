@@ -16,4 +16,7 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.androidx.media3.extractor)
     implementation(libs.androidx.media3.muxer)
+    implementation(libs.jump3r)
+    // Photo posts with music (TikTok, Instagram) are made into a video with their sound.
+    implementation(libs.androidx.media3.transformer)
 }

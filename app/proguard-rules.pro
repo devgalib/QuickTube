@@ -35,3 +35,6 @@
 -dontwarn org.brotli.**
 -dontwarn com.github.luben.zstd.**
 -dontwarn org.objectweb.asm.**
+
+# jump3r (MP3 encoder): its LameEncoder wrapper uses javax.sound, which Android lacks; we use the mp3 package directly.
+-dontwarn javax.sound.**

@@ -117,6 +117,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent, navigate: (Any) -> Unit) {
+        // Several links shared at once (or "Bulk download" from a share): the bulk screen with them filled in.
+        intent.getStringExtra(EXTRA_BULK)?.let { navigate(com.edureminder.quicktube.core.navigation.BulkRoute(it)); return }
         intent.getStringExtra("open")?.let { open ->
             when {
                 open == "downloads" -> navigate(DownloadingRoute)
@@ -143,5 +145,6 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_SHOW_SHEET = "show_sheet"
+        const val EXTRA_BULK = "bulk_links"
     }
 }

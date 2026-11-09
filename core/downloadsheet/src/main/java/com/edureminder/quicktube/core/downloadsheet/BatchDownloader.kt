@@ -129,4 +129,5 @@ fun DownloadOption.toRequest(
     headers = headers,
     protocol = protocol,
     extractAudio = extractAudio,
+    images = images,
 )

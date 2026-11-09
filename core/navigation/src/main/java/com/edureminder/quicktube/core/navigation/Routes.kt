@@ -15,6 +15,12 @@ import kotlinx.serialization.Serializable
 @Serializable data class VideoRoute(val url: String, val title: String? = null, val thumbnail: String? = null)
 @Serializable data class ChannelRoute(val url: String)
 @Serializable data class PlaylistRoute(val url: String)
+/** YouTube videos and songs watched in the app, with where each was left. */
+@Serializable data object WatchHistoryRoute
+@Serializable data class BulkRoute(val text: String = "", val name: String = "")
+@Serializable data class LocalPlaylistsRoute(val music: Boolean)
+@Serializable data class LocalPlaylistRoute(val id: Long)
+@Serializable data class BulkJobRoute(val id: Long)
 @Serializable data class HowToRoute(val platform: String)
 @Serializable data object GamesRoute
 

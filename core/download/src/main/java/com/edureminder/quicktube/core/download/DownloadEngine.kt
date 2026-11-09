@@ -2,6 +2,7 @@ package com.edureminder.quicktube.core.download
 
 import android.content.Context
 import android.media.MediaScannerConnection
+import com.edureminder.quicktube.core.common.Branding
 import com.edureminder.quicktube.core.common.Urls
 import com.edureminder.quicktube.core.data.MediaRepository
 import com.edureminder.quicktube.core.data.SettingsRepository
@@ -39,6 +40,7 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import com.edureminder.quicktube.core.extractor.UniversalExtractor
@@ -85,6 +87,7 @@ internal class DownloadEngine(
         .retryOnConnectionFailure(true)
         .build()
     private val limiter = RateLimiter { settings.current().speedLimitKbps * 1024L }
+    private val audio = AudioFinisher(context, client)
 
     /*
      * App-wide limits, however many downloads are queued or running:
@@ -139,7 +142,12 @@ internal class DownloadEngine(
     }
 
     override suspend fun findExisting(request: DownloadRequest): com.edureminder.quicktube.core.model.DownloadTask? {
-        val e = dao.findSame(request.pageUrl, request.title, Urls.host(request.pageUrl ?: request.url), request.quality) ?: return null
+        // A feed, profile or home page isn't one video: every video downloaded from it shares that address and title
+        // (a TikTok profile's "Name (@user) | TikTok"), so only the file itself can tell them apart.
+        val onePage = Urls.namesOneMedia(request.pageUrl)
+        val page = request.pageUrl?.takeIf { onePage }
+        val title = request.title.takeUnless { Urls.isGenericTitle(it) || request.pageUrl != null && !onePage }
+        val e = dao.findSame(page, title, Urls.host(request.pageUrl ?: request.url), request.quality, Urls.mediaFileKey(request.url)) ?: return null
         return when (e.status) {
             DownloadStatus.COMPLETED -> e.takeIf { File(it.filePath).exists() }
             DownloadStatus.FAILED -> null
@@ -150,15 +158,18 @@ internal class DownloadEngine(
     private suspend fun enqueueLocked(request: DownloadRequest): Long {
         val s = settings.current()
         // Public Downloads is the default; fall back to app storage if this device/OS version won't let us write there.
-        val dir = File(s.downloadDir).apply { mkdirs() }.takeIf { it.canWrite() }
+        val root = File(s.downloadDir).apply { mkdirs() }.takeIf { it.canWrite() }
             ?: File(context.getExternalFilesDir(android.os.Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir, "QuickTube").apply { mkdirs() }
+        // A bulk download keeps its files together in a folder of its own name.
+        val dir = request.folder?.let { Urls.safeFileName(it) }?.takeIf { it.isNotBlank() }?.let { File(root, it).apply { mkdirs() } } ?: root
         val base = Urls.safeFileName(request.title)
         val suffix = request.quality?.let { "($it)" }.orEmpty()
-        var file = File(dir, "$base$suffix.${request.ext}")
+        // Every file ends with the app's name and site ("Song(720p) - QuickTube edureminder.com.mp4").
+        var file = File(dir, Branding.fileName("$base$suffix") + ".${request.ext}")
         var n = 1
         // Merged downloads only appear on disk when they finish, so names already given to tasks count too.
         while (file.exists() || File(file.path + ".part").exists() || dao.countWithPath(file.absolutePath) > 0) {
-            file = File(dir, "$base$suffix ($n).${request.ext}"); n++
+            file = File(dir, Branding.fileName("$base$suffix ($n)") + ".${request.ext}"); n++
         }
         val headers = if (request.headers.isEmpty()) null
         else JsonObject(request.headers.mapValues { JsonPrimitive(it.value) }).toString()
@@ -191,6 +202,7 @@ internal class DownloadEngine(
                 extractAudio = request.extractAudio,
                 clipStartMs = request.clipStartMs,
                 clipEndMs = request.clipEndMs,
+                slideImages = request.images.takeIf { it.isNotEmpty() }?.let { l -> kotlinx.serialization.json.JsonArray(l.map { JsonPrimitive(it) }).toString() },
             ),
         )
         reschedule()
@@ -295,10 +307,11 @@ internal class DownloadEngine(
         try {
             val target = File(entity.filePath)
             target.parentFile?.mkdirs()
-            val saved = if (entity.clipEndMs > entity.clipStartMs && entity.protocol == StreamProtocol.HTTP) clip(id, target) else try {
+            val saved = if (entity.slideImages != null) slideshow(entity, target)
+            else if (entity.clipEndMs > entity.clipStartMs && entity.protocol == StreamProtocol.HTTP) clip(id, target) else try {
                 val base = partBase(entity)
                 entity = download(id, File("$base.part"), File("$base.audio.part"))
-                finish(entity, target, base)
+                finish(entity, File(entity.filePath), base)
             } catch (ex: UnsupportedCodecException) {
                 // The site served a codec this phone can't store (AV1 before Android 14, VP9 with AAC…):
                 // re-extract, take a compatible format of the same quality, download again.
@@ -306,11 +319,23 @@ internal class DownloadEngine(
                 deleteParts(entity)
                 val base = partBase(dao.get(id) ?: return)
                 entity = download(id, File("$base.part"), File("$base.audio.part"))
-                finish(entity, target, base)
+                finish(entity, File(entity.filePath), base)
             }
-            val probedDuration = if (entity.durationSec > 0) entity.durationSec else probeDurationSec(saved)
+            // Songs get their cover, title and artist; the cover is kept so the Library shows it offline too.
+            val cover = if (entity.extractAudio || entity.mimeType.startsWith("audio/") || saved.extension == "mp3") {
+                withContext(Dispatchers.IO) { audio.tag(id, saved, entity.title, entity.thumbnail, headersOf(entity)) }
+            } else null
+            // Videos and photos carry QuickTube's description, site and tags too (songs got them with their cover above).
+            if (cover == null) withContext(Dispatchers.IO) { brand(saved, entity.title) }
+            // YouTube videos get their captions beside them ("Title(720p).en.srt"), which any player can show. Not for cuts.
+            if (!entity.extractAudio && saved.extension in setOf("mp4", "webm", "mkv") && entity.clipEndMs <= entity.clipStartMs) {
+                entity.pageUrl?.takeIf { Urls.youtubeVideoId(it) != null }?.let { page -> withContext(Dispatchers.IO) { saveCaptions(page, saved) } }
+            }
+            // The saved file's own length: the page's figure can belong to another video (and then hides a wrong file).
+            val probedDuration = probeDurationSec(saved).takeIf { it > 0 } ?: entity.durationSec
             val done = (dao.get(id) ?: return).copy(
                 durationSec = probedDuration,
+                thumbnail = cover ?: entity.thumbnail,
                 status = DownloadStatus.COMPLETED,
                 completedAt = System.currentTimeMillis(),
                 totalBytes = saved.length(),
@@ -327,6 +352,7 @@ internal class DownloadEngine(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
+            android.util.Log.w(TAG, "Task $id failed", e)
             val net = network.currentType()
             val status = if (net == NetworkType.NONE) DownloadStatus.WAITING_NETWORK else DownloadStatus.FAILED
             dao.updateStatus(id, status, friendlyError(e))
@@ -431,6 +457,42 @@ internal class DownloadEngine(
 
     private fun partsDir() = File(context.noBackupFilesDir, "parts").apply { mkdirs() }
 
+    /** A photo post with music: its pictures and song fetched, then made into a video (see [SlideshowMaker]). */
+    private suspend fun slideshow(e: DownloadEntity, target: File): File = withContext(Dispatchers.IO) {
+        val headers = headersOf(e)
+        val urls = Json.parseToJsonElement(e.slideImages!!).jsonArray.map { it.jsonPrimitive.content }
+        val work = File(partsDir(), "task-${e.id}").apply { mkdirs() }
+        try {
+            fun fetch(url: String, to: File): File {
+                http.newCall(request(url, headers, null)).execute().use { r ->
+                    if (!r.isSuccessful) throw HttpStatusException(r.code)
+                    to.outputStream().use { r.body.byteStream().copyTo(it) }
+                }
+                return to
+            }
+            val pictures = urls.mapIndexed { i, u -> fetch(u, File(work, "pic$i")) }
+            val music = fetch(e.url, File(work, "music"))
+            dao.updateStatus(e.id, DownloadStatus.MERGING)
+            notifier.refresh(true)
+            val out = mergeLock.withLock { SlideshowMaker.make(context, pictures, music, File(work, "out.mp4")) }
+            publishFile(out, target).also {
+                dao.get(e.id)?.let { cur -> dao.update(cur.copy(filePath = it.absolutePath, mimeType = "video/mp4", type = ContentType.VIDEO)) }
+            }
+        } finally {
+            work.deleteRecursively()
+        }
+    }
+
+    /** The best caption track of a YouTube video as SubRip next to [video]; nothing when it has none. Never fails the download. */
+    private suspend fun saveCaptions(page: String, video: File) {
+        runCatching {
+            val track = SubtitleFiles.pick(media.details(page).subtitles, java.util.Locale.getDefault().language) ?: return
+            val vtt = http.newCall(okhttp3.Request.Builder().url(track.url).build()).execute().use { r -> if (r.isSuccessful) r.body.string() else null } ?: return
+            val srt = SubtitleFiles.vttToSrt(vtt).takeIf { it.isNotBlank() } ?: return
+            File(video.parentFile, SubtitleFiles.nameFor(video.name, track.language)).writeText(srt)
+        }.onFailure { android.util.Log.w(TAG, "Captions not saved: $it") }
+    }
+
     /** Merges / remuxes / renames the finished parts into the final file, which is returned (its extension may change). */
     private suspend fun finish(e: DownloadEntity, target: File, base: String): File {
         val videoPart = File("$base.part")
@@ -440,7 +502,10 @@ internal class DownloadEngine(
         // Intermediate results stay next to the parts; only the finished file is moved to the download folder.
         val work = if (isPrivate) File("$base.out.${target.extension}") else target
         val videoOut = if (e.extractAudio) File("$base.video.mp4") else work
-        if (e.audioUrl != null || isHls || e.extractAudio) {
+        val wantMp3 = target.extension.equals("mp3", ignoreCase = true)
+        // FLAC, WAV, AAC or Opus chosen: made from the site's audio once it's here.
+        val wantOther = target.extension.lowercase() in AudioConverter.TYPES
+        if (e.audioUrl != null || isHls || e.extractAudio || wantMp3 || wantOther) {
             dao.updateStatus(e.id, DownloadStatus.MERGING)
             notifier.refresh(true)
         }
@@ -461,6 +526,20 @@ internal class DownloadEngine(
             val src = out
             try { out = mergeLock.withLock { MediaMerger.extractAudio(src, work) } } finally { if (src != out) src.delete() }
         }
+        // MP3 chosen: the site's audio (AAC, Opus…) is converted on the phone.
+        if (wantMp3) {
+            // "MP3 320K" → 320 kbps (192 when the label has no number).
+            val kbps = e.quality?.let { Regex("""(\d{2,3})K""").find(it)?.groupValues?.get(1)?.toIntOrNull() } ?: 192
+            out = mergeLock.withLock { audio.toMp3(out, work, kbps) }
+            if (!isPrivate && out != target) out = moveFile(out, target)
+        }
+        if (wantOther) {
+            val made = File(work.parentFile, work.nameWithoutExtension + ".converting." + target.extension)
+            val src = out
+            mergeLock.withLock { AudioConverter.convert(src, made) }
+            src.delete()
+            out = moveFile(made, work)
+        }
         // Removed or paused while processing: don't drop an untracked file into the download folder.
         if (!currentCoroutineContext().isActive) { out.delete(); throw CancellationException("Stopped") }
         if (isPrivate) out = publishFile(out, target)
@@ -468,6 +547,10 @@ internal class DownloadEngine(
         val mime = when (out.extension.lowercase()) {
             "webm" -> if (e.extractAudio || e.mimeType.startsWith("audio/")) "audio/webm" else "video/webm"
             "m4a" -> "audio/mp4"
+            "flac" -> "audio/flac"
+            "wav" -> "audio/wav"
+            "aac" -> "audio/aac"
+            "opus" -> "audio/ogg"
             "ts" -> "video/mp2t"
             "mp4" -> if (e.mimeType.startsWith("audio/")) e.mimeType else "video/mp4"
             else -> e.mimeType
@@ -479,6 +562,27 @@ internal class DownloadEngine(
     }
 
     /** Moves a finished file from private storage to the download folder under [target]'s name (its own extension). */
+    /** QuickTube's description, address and tags in a finished video (MP4) or photo (JPEG); other files are left as they are. */
+    private fun brand(file: File, title: String) {
+        val started = System.currentTimeMillis()
+        val ok = runCatching {
+            when (file.extension.lowercase()) {
+                "mp4", "m4v", "mov", "m4a", "mp3" -> AudioTags.write(file, AudioTags.Tags(title, null, null))
+                "jpg", "jpeg" -> {
+                    android.media.ExifInterface(file.path).apply {
+                        setAttribute(android.media.ExifInterface.TAG_IMAGE_DESCRIPTION, Branding.DESCRIPTION)
+                        setAttribute(android.media.ExifInterface.TAG_SOFTWARE, Branding.ENCODER)
+                        setAttribute(android.media.ExifInterface.TAG_COPYRIGHT, Branding.URL)
+                        setAttribute(android.media.ExifInterface.TAG_USER_COMMENT, Branding.KEYWORDS.joinToString(", "))
+                    }.saveAttributes()
+                    true
+                }
+                else -> false
+            }
+        }.onFailure { android.util.Log.w("DownloadEngine", "Branding failed: $it") }.getOrDefault(false)
+        android.util.Log.i("DownloadEngine", "Branded ${file.name}: $ok in ${System.currentTimeMillis() - started} ms")
+    }
+
     private fun publishFile(src: File, target: File): File {
         val dest = if (src.extension == target.extension) target else uniqueSibling(target, src.extension)
         return moveFile(src, dest)
@@ -601,9 +705,14 @@ internal class DownloadEngine(
             ?.let { h -> JsonObject(h.mapValues { JsonPrimitive(it.value) }).toString() }
         val cur = dao.get(e.id) ?: e
         val sameFormat = !compatibleOnly && option.protocol == cur.protocol && (option.audioUrl != null) == (cur.audioUrl != null)
+        val quality = if (height != null && option.height > 0) "${option.height}p" else cur.quality
+        // Another quality is saved under its own name: "Title(1080p).mp4", never the "(2160p)" first asked for.
+        val path = cur.quality?.takeIf { !sameFormat && quality != it && cur.filePath.contains("($it)") }
+            ?.let { cur.filePath.replace("($it)", "($quality)") }
+            ?.takeIf { !File(it).exists() && dao.countWithPath(it) == 0 } ?: cur.filePath
         val updated = cur.copy(
             url = option.url, audioUrl = option.audioUrl, protocol = option.protocol, headers = mergedHeaders ?: cur.headers,
-            quality = if (height != null && option.height > 0) "${option.height}p" else cur.quality,
+            quality = quality, filePath = path,
             totalBytes = if (sameFormat) cur.totalBytes else option.sizeBytes,
             audioTotalBytes = if (option.audioUrl == null) -1 else if (sameFormat) cur.audioTotalBytes else option.audioSizeBytes,
             downloadedBytes = if (sameFormat) cur.downloadedBytes else 0,

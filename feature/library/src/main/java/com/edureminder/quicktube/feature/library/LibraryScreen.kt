@@ -300,7 +300,7 @@ fun statusText(task: DownloadTask, speed: Long): String = when (task.status) {
     DownloadStatus.QUEUED -> "Waiting…"
     DownloadStatus.PAUSED -> "Paused"
     DownloadStatus.WAITING_NETWORK -> "Waiting for network"
-    DownloadStatus.MERGING -> "Processing video…"
+    DownloadStatus.MERGING -> if (task.filePath.endsWith(".mp3", ignoreCase = true)) "Converting to MP3…" else "Processing video…"
     DownloadStatus.FAILED -> com.edureminder.quicktube.core.common.DownloadErrors.friendly(task.error)
     DownloadStatus.COMPLETED -> "Completed"
 }

@@ -61,4 +61,20 @@ class UrlsAndFormatTest {
         assertEquals("1.8B", Format.count(1_800_000_000))
         assertEquals("440K", Format.count(440_000))
     }
+
+    @Test
+    fun mediaFileKeysAndGenericTitles() {
+        assertEquals(
+            "https://video.fdac1-1.fna.fbcdn.net/v/t42.1790-2/440912345_1234567_n.mp4",
+            Urls.mediaFileKey("https://video.fdac1-1.fna.fbcdn.net/v/t42.1790-2/440912345_1234567_n.mp4?_nc_cat=1&oh=abc&oe=123"),
+        )
+        // Shared names say nothing about which video it is.
+        assertNull(Urls.mediaFileKey("https://rr3---sn-abc.googlevideo.com/videoplayback?id=1&itag=18"))
+        assertNull(Urls.mediaFileKey("https://cdn.example.com/hls/master.m3u8?token=1"))
+        assertNull(Urls.mediaFileKey("https://cdn.example.com/video.mp4"))
+        assertTrue(Urls.isGenericTitle("Facebook"))
+        assertTrue(Urls.isGenericTitle("Facebook video"))
+        assertTrue(Urls.isGenericTitle(" video "))
+        assertFalse(Urls.isGenericTitle("শাইখ ইবনু উসাইমীন রাহিমাহুল্লাহ"))
+    }
 }

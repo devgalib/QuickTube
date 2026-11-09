@@ -61,7 +61,47 @@ data class AppSettings(
     val onboarded: Boolean = false,
     /** Crash reports + anonymous usage stats (official builds only). */
     val analyticsEnabled: Boolean = true,
+    /** How captions look in the players. */
+    val captionStyle: CaptionStyle = CaptionStyle(),
 )
+
+/** Caption look: [size] scales the base text size; [position] 0 = top of the video … 1 = bottom. Colors are ARGB. */
+data class CaptionStyle(
+    val size: Float = 1f,
+    val textColor: Long = 0xFFFFFFFF,
+    val bold: Boolean = false,
+    val outline: Boolean = false,
+    val background: CaptionBackground = CaptionBackground.BOX,
+    val backgroundColor: Long = 0xFF000000,
+    val backgroundOpacity: Float = 0.6f,
+    val position: Float = 1f,
+) {
+    /** "size|text|bold|outline|bg|bgColor|opacity|position" for storage. */
+    fun encode() = listOf(size, textColor, bold, outline, background.name, backgroundColor, backgroundOpacity, position).joinToString("|")
+
+    companion object {
+        fun decode(s: String?): CaptionStyle {
+            val p = s?.split('|') ?: return CaptionStyle()
+            val d = CaptionStyle()
+            return CaptionStyle(
+                size = p.getOrNull(0)?.toFloatOrNull() ?: d.size,
+                textColor = p.getOrNull(1)?.toLongOrNull() ?: d.textColor,
+                bold = p.getOrNull(2)?.toBooleanStrictOrNull() ?: d.bold,
+                outline = p.getOrNull(3)?.toBooleanStrictOrNull() ?: d.outline,
+                background = p.getOrNull(4)?.let { runCatching { CaptionBackground.valueOf(it) }.getOrNull() } ?: d.background,
+                backgroundColor = p.getOrNull(5)?.toLongOrNull() ?: d.backgroundColor,
+                backgroundOpacity = p.getOrNull(6)?.toFloatOrNull() ?: d.backgroundOpacity,
+                position = p.getOrNull(7)?.toFloatOrNull() ?: d.position,
+            )
+        }
+    }
+}
+
+/** Behind the caption text: nothing, a rounded box, or a soft band fading out at the sides. */
+enum class CaptionBackground { NONE, BOX, GRADIENT }
+
+/** The Sites entry for the app's own YouTube (the Home screen's YouTube tab), shown as recommended. */
+const val BUILT_IN_YOUTUBE_URL = "quicktube://youtube"
 
 data class Site(
     val id: Long = 0,
@@ -92,7 +132,14 @@ data class PlayHistoryEntry(
     val positionMs: Long,
     val durationMs: Long,
     val openedAt: Long,
-)
+    val thumbnail: String? = null,
+    val uploader: String? = null,
+) {
+    /** The online video this entry is about ("web:" / "music:" prefixes removed); null for files. */
+    val pageUrl: String? get() = key.removePrefix("web:").removePrefix("music:").takeIf { it.startsWith("http") }
+    /** How far it was watched, 0..1 (0 when the length isn't known). */
+    val progress: Float get() = if (durationMs > 0) (positionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+}
 
 /** A video saved with "Watch later". */
 data class SavedVideo(

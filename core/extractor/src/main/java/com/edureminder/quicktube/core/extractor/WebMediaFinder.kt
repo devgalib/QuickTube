@@ -23,6 +23,11 @@ data class FoundPage(
     val durationSec: Double? = null,
     /** Structured sources (quality lists etc.) when the page declares them. */
     val declared: List<StreamCandidate> = emptyList(),
+    /** A photo post: its pictures and, when it has one, its music. */
+    val photos: List<String> = emptyList(),
+    val music: String? = null,
+    /** The site says the post was removed or is private (TikTok's "item doesn't exist"). */
+    val gone: Boolean = false,
 ) {
     val candidates: List<StreamCandidate>
         get() = declared.ifEmpty { media.map { StreamCandidate(it.url, it.quality, it.height) } }
@@ -46,10 +51,10 @@ class WebMediaFinder(private val client: OkHttpClient) {
         val mobile = runCatching { get(pageUrl, MOBILE_UA) }.getOrNull()
             ?: return@withContext runCatching { get(pageUrl, DESKTOP_UA) }.getOrNull()?.parsed(DESKTOP_UA)?.takeIf { it.candidates.isNotEmpty() }
         val found = mobile.parsed(MOBILE_UA)
-        if (found.candidates.isNotEmpty()) return@withContext found
+        if (found.candidates.isNotEmpty() || found.photos.isNotEmpty() || found.gone) return@withContext found
         // Some sites only expose media to desktop browsers.
         val desktop = runCatching { get(pageUrl, DESKTOP_UA) }.getOrNull() ?: return@withContext found.takeIf { it.media.isNotEmpty() }
-        desktop.parsed(DESKTOP_UA).takeIf { it.candidates.isNotEmpty() }
+        desktop.parsed(DESKTOP_UA).takeIf { it.candidates.isNotEmpty() || it.gone }
     }
 
     private class Fetched(val body: String, val finalUrl: String, val cookies: String?)
@@ -64,7 +69,12 @@ class WebMediaFinder(private val client: OkHttpClient) {
     }
 
     fun parse(html: String, pageUrl: String): FoundPage {
+        if (PageMediaParser.tikTokGone(html)) return FoundPage("TikTok video", null, pageUrl, emptyList(), gone = true)
         PageMediaParser.parse(html, pageUrl)?.let { pm ->
+            if (pm.photos.isNotEmpty()) {
+                return FoundPage(pm.title ?: "Photos", pm.thumbnail, pageUrl, emptyList(), mapOf("Referer" to pageUrl), pm.durationSec,
+                    photos = pm.photos, music = pm.music)
+            }
             val real = pm.candidates.filterNot { isSiteAsset(it.url) }
             if (real.isNotEmpty()) return FoundPage(pm.title ?: "video", pm.thumbnail, pageUrl, emptyList(), mapOf("Referer" to pageUrl), pm.durationSec, real)
         }

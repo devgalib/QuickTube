@@ -35,6 +35,8 @@ data class SheetUi(
     val items: Boolean = false,
     /** A part of the video can be downloaded instead of all of it (YouTube videos). */
     val cuttable: Boolean = false,
+    /** The site says the video was removed or is private: no point looking further. */
+    val gone: Boolean = false,
 )
 
 class DownloadSheetViewModel(
@@ -45,6 +47,7 @@ class DownloadSheetViewModel(
     private val universal: UniversalExtractor,
     private val analytics: com.edureminder.quicktube.core.analytics.Analytics,
     private val http: okhttp3.OkHttpClient,
+    private val links: LinkResolver,
 ) : ViewModel() {
     private val _ui = MutableStateFlow(SheetUi())
 
@@ -98,6 +101,32 @@ class DownloadSheetViewModel(
                 _ui.value = SheetUi(loading = true, title = target.title, thumbnail = target.thumbnail, pageUrl = target.pageUrl,
                     durationSec = target.durationSec?.toLong() ?: -1)
                 job = viewModelScope.launch {
+                    // A Facebook reel/video address names the one being watched: read that post itself. The page's
+                    // own data and the files it loaded belong to every reel scrolled past.
+                    val fbId = com.edureminder.quicktube.core.extractor.FacebookReader.videoId(target.pageUrl)
+                    if (fbId != null) {
+                        // Both at once: the public page has the title and thumbnail (the signed-in one doesn't); the
+                        // signed-in one also works for posts only friends can see.
+                        val public = async { runCatching { universal.extract(target.pageUrl, emptyMap()) }.getOrNull()?.takeIf { it.options.isNotEmpty() } }
+                        val signedIn = async { runCatching { universal.extract(target.pageUrl, target.headers) }.getOrNull()?.takeIf { it.options.isNotEmpty() } }
+                        val mine = signedIn.await()
+                        // The public read usually finishes first; don't wait long for it once the signed-in one is in.
+                        val open = if (mine == null) public.await() else kotlinx.coroutines.withTimeoutOrNull(4000) { public.await() }
+                        public.cancel()
+                        val fb = open ?: mine
+                        if (fb != null) {
+                            val title = (open?.title ?: fb.title).takeUnless(com.edureminder.quicktube.core.common.Urls::isGenericTitle)
+                                // Never a pile of "Facebook video (1)", "(2)"…: the reel's own number tells them apart.
+                                ?: "Facebook reel ${fbId.takeLast(8)}"
+                            _ui.value = _ui.value.copy(
+                                loading = false, options = fb.options, headers = if (fb === open) fb.headers else target.headers + fb.headers,
+                                title = title, thumbnail = open?.thumbnail ?: fb.thumbnail ?: _ui.value.thumbnail,
+                                durationSec = fb.durationSec?.toLong() ?: _ui.value.durationSec,
+                                report = listOf("facebook post $fbId → ${fb.options.size} formats (${if (fb === open) "public" else "signed in"})"),
+                            )
+                            return@launch
+                        }
+                    }
                     val r = runCatching { resolver.resolveWithReport(target.candidates, target.headers, target.durationSec, target.pageFetch) }
                         .getOrElse { StreamResolver.Result(emptyList(), listOf("resolver: ${it.message}")) }
                     var options = r.options
@@ -128,60 +157,12 @@ class DownloadSheetViewModel(
             } else {
                 _ui.value = SheetUi(loading = true, title = target.preview?.title.orEmpty(), thumbnail = target.preview?.thumbnail, pageUrl = target.url)
                 job = viewModelScope.launch {
-                    _ui.value = try {
-                        if (media.linkKind(target.url) != com.edureminder.quicktube.core.model.ItemKind.VIDEO) {
-                            loadWebPage(target.url)
-                        } else {
-                        val d = media.details(target.url)
-                        SheetUi(
-                            loading = false, title = d.item.title, thumbnail = d.item.thumbnail, durationSec = d.item.durationSec,
-                            pageUrl = d.item.url, options = d.options, isLive = d.item.isLive,
-                            error = if (d.item.isLive) "Live streams can't be downloaded until they end." else null,
-                            cuttable = !d.item.isLive && d.item.durationSec > 1,
-                        )
-                        }
-                    } catch (e: Throwable) {
-                        if (e is kotlinx.coroutines.CancellationException) throw e
-                        _ui.value.copy(loading = false, error = e.message ?: "Couldn't load formats")
-                    }
+                    // A failed look-up keeps the preview's title and picture.
+                    val r = links.resolve(target.url)
+                    _ui.value = if (r.error != null && r.title.isBlank()) r.copy(title = _ui.value.title, thumbnail = r.thumbnail ?: _ui.value.thumbnail) else r
                 }
             }
         }
-    }
-
-    private suspend fun loadWebPage(url: String): SheetUi {
-        val started = System.currentTimeMillis()
-        fun timing(stage: String) = android.util.Log.i("SheetTiming", "$stage at ${System.currentTimeMillis() - started} ms")
-        // Facebook: its own reader gives every resolution; the generic page reader would only find SD/HD.
-        if (com.edureminder.quicktube.core.extractor.FacebookReader.isFacebook(url)) {
-            val fb = universal.extract(url)
-            timing("facebook (${fb?.options?.size ?: -1} options)")
-            if (fb != null && fb.options.isNotEmpty()) return SheetUi(
-                loading = false, title = fb.title, thumbnail = fb.thumbnail, pageUrl = url, options = fb.options, headers = fb.headers,
-                durationSec = fb.durationSec?.toLong() ?: -1,
-            )
-        }
-        val page = web.find(url)
-        timing("page read (${page?.candidates?.size ?: -1} candidates)")
-        val r = if (page != null && page.candidates.isNotEmpty()) resolver.resolveWithReport(page.candidates, page.headers, page.durationSec)
-        else StreamResolver.Result(emptyList(), listOf("page: " + if (page == null) "couldn't load" else "no video data"))
-        timing("resolved (${r.options.size} options)")
-        if (r.options.isNotEmpty() && page != null) return SheetUi(
-            loading = false, title = page.title, thumbnail = page.thumbnail, pageUrl = url, options = r.options, headers = page.headers,
-            durationSec = page.durationSec?.toLong() ?: -1, report = r.report,
-        )
-        // Fall back to the site-specific engine (1800+ sites).
-        val x = universal.extract(url)
-        timing("yt-dlp (${x?.options?.size ?: -1} options)")
-        val report = r.report + "yt-dlp → " + (x?.let { "${it.options.size} formats" } ?: "no result")
-        if (x != null && x.options.isNotEmpty()) return SheetUi(
-            loading = false, title = x.title, thumbnail = x.thumbnail, pageUrl = url, options = x.options, headers = x.headers,
-            durationSec = x.durationSec?.toLong() ?: -1, report = report,
-        )
-        return SheetUi(
-            loading = false, title = page?.title.orEmpty(), thumbnail = page?.thumbnail, pageUrl = url, report = report,
-            error = "No video found. Try opening the page in the QuickTube browser and play the video.",
-        )
     }
 
     fun retry() {
@@ -252,4 +233,21 @@ internal fun clipRequest(request: DownloadRequest, option: DownloadOption, clip:
         durationSec = ((clip.last - clip.first) / 1000).coerceAtLeast(1),
         sizeBytes = scaled(option.sizeBytes), audioSizeBytes = scaled(option.audioSizeBytes),
     )
+}
+
+/**
+ * A photo post's choices: "Video with sound" (the photos over the post's music, when it has some) and each photo.
+ * Shown as the post's items, all ticked.
+ */
+fun photoPostOptions(photos: List<String>, music: String?): List<DownloadOption> = buildList {
+    if (music != null) add(DownloadOption(
+        id = "slides", kind = FormatKind.VIDEO, title = "Video with sound", info = "Photos with the post's music · MP4",
+        ext = "mp4", mimeType = "video/mp4", url = music, images = photos, thumbnail = photos.first(),
+    ))
+    photos.forEachIndexed { i, p ->
+        add(DownloadOption(
+            id = "photo$i", kind = FormatKind.IMAGE, title = "Photo ${i + 1}", info = "JPG",
+            ext = "jpg", mimeType = "image/jpeg", url = p, thumbnail = p,
+        ))
+    }
 }

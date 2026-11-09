@@ -11,7 +11,9 @@ import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
@@ -40,7 +42,11 @@ class PlaybackService : MediaSessionService() {
         val http = DefaultHttpDataSource.Factory()
             .setUserAgent(USER_AGENT)
             .setAllowCrossProtocolRedirects(true)
-        val dataSource = DefaultDataSource.Factory(this, ChunkedHttpDataSource.Factory(http))
+        // Songs queued by page address get their stream when the player reaches them (see OnlineAudio).
+        val dataSource = ResolvingDataSource.Factory(
+            DefaultDataSource.Factory(this, ChunkedHttpDataSource.Factory(http)),
+            OnlineAudioResolver { org.koin.java.KoinJavaComponent.get(com.edureminder.quicktube.core.data.MediaRepository::class.java) },
+        )
         // A downloaded video decoder pack has to be loaded before the first track selection to be used for it.
         VideoDecoderPack.loadIfInstalled(this)
         // Phone decoders first; FFmpeg only for what the phone can't decode: audio (else such files play silently) and
@@ -72,7 +78,7 @@ class PlaybackService : MediaSessionService() {
                 ): ListenableFuture<MutableList<MediaItem>> = Futures.immediateFuture(
                     mediaItems.map { item ->
                         val uri = item.requestMetadata.mediaUri ?: item.localConfiguration?.uri
-                        item.buildUpon().setUri(uri).build()
+                        item.buildUpon().setUri(uri).setSubtitleConfigurations(subtitlesOf(item)).build()
                     }.toMutableList(),
                 )
             })
@@ -101,7 +107,7 @@ class PlaybackService : MediaSessionService() {
     /** Plays a separate audio URL alongside a video-only URL (high quality online streams). */
     private class SplitStreamSourceFactory(
         private val delegate: DefaultMediaSourceFactory,
-        private val dataSource: DefaultDataSource.Factory,
+        private val dataSource: DataSource.Factory,
     ) : MediaSource.Factory {
         override fun setDrmSessionManagerProvider(p: DrmSessionManagerProvider) = apply { delegate.setDrmSessionManagerProvider(p) }
         override fun setLoadErrorHandlingPolicy(p: LoadErrorHandlingPolicy) = apply { delegate.setLoadErrorHandlingPolicy(p) }
@@ -111,7 +117,9 @@ class PlaybackService : MediaSessionService() {
             val audio = mediaItem.requestMetadata.extras?.getString(EXTRA_AUDIO_URI)
             if (audio.isNullOrBlank()) return delegate.createMediaSource(mediaItem)
             val progressive = ProgressiveMediaSource.Factory(dataSource)
-            val video = progressive.createMediaSource(mediaItem)
+            // The default factory keeps the item's caption tracks (YouTube plays video and audio as separate streams).
+            val video = if (mediaItem.localConfiguration?.subtitleConfigurations.isNullOrEmpty()) progressive.createMediaSource(mediaItem)
+            else delegate.createMediaSource(mediaItem)
             val audioSource = progressive.createMediaSource(MediaItem.fromUri(Uri.parse(audio)))
             return MergingMediaSource(true, video, audioSource)
         }
@@ -130,10 +138,21 @@ class PlaybackService : MediaSessionService() {
         const val EXTRA_IS_VIDEO = "is_video"
         const val USER_AGENT = "Mozilla/5.0 (Linux; Android 12) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36"
 
-        fun extras(id: String, isVideo: Boolean, audioUri: String?) = Bundle().apply {
+        const val EXTRA_SUBTITLE_URI = "subtitle_uri"
+
+        fun extras(id: String, isVideo: Boolean, audioUri: String?, subtitleUri: String? = null) = Bundle().apply {
             putString(EXTRA_ID, id)
             putBoolean(EXTRA_IS_VIDEO, isVideo)
             audioUri?.let { putString(EXTRA_AUDIO_URI, it) }
+            subtitleUri?.let { putString(EXTRA_SUBTITLE_URI, it) }
+        }
+
+        /** Captions an item asked for in its extras (controllers drop subtitle tracks, extras survive). */
+        internal fun subtitlesOf(item: MediaItem): List<MediaItem.SubtitleConfiguration> {
+            val uri = item.requestMetadata.extras?.getString(EXTRA_SUBTITLE_URI) ?: return emptyList()
+            val mime = if (uri.substringBefore('?').endsWith(".srt", ignoreCase = true)) androidx.media3.common.MimeTypes.APPLICATION_SUBRIP
+            else androidx.media3.common.MimeTypes.TEXT_VTT
+            return listOf(MediaItem.SubtitleConfiguration.Builder(Uri.parse(uri)).setMimeType(mime).setSelectionFlags(C.SELECTION_FLAG_DEFAULT).build())
         }
     }
 }

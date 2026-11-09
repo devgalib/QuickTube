@@ -121,7 +121,16 @@ fun VideoScreen(
     val appSettings by settingsRepo.settings.collectAsStateWithLifecycle(com.edureminder.quicktube.core.model.AppSettings())
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val currentQuality by vm.quality.collectAsStateWithLifecycle()
-    val related = (details as? LoadState.Success)?.data?.related.orEmpty().firstOrNull { it.kind == com.edureminder.quicktube.core.model.ItemKind.VIDEO && !it.isLive }
+    val caption by vm.caption.collectAsStateWithLifecycle()
+    val captionMenu = (details as? LoadState.Success)?.data?.subtitles?.takeIf { it.isNotEmpty() }?.let {
+        com.edureminder.quicktube.core.playerui.CaptionMenu(it, caption, vm::setCaption)
+    }
+    // Playing a local playlist: its next video, always autoplayed; otherwise YouTube's first suggestion.
+    val queued = remember(url) { com.edureminder.quicktube.core.navigation.VideoQueue.nextAfter(url) }
+    val inQueue = remember(url) { com.edureminder.quicktube.core.navigation.VideoQueue.position(url) }
+    val related = queued ?: (details as? LoadState.Success)?.data?.related.orEmpty().firstOrNull { it.kind == com.edureminder.quicktube.core.model.ItemKind.VIDEO && !it.isLive }
+    val autoplayOn = if (inQueue != null) queued != null else appSettings.autoplayNext
+    var savePlaylist by remember { mutableStateOf(false) }
     // YouTube's player extras: Quality, the autoplay switch, Next = the first suggestion (with "Up next" at the end).
     val qualityMenu = vm.qualities().takeIf { it.isNotEmpty() }?.let { q ->
         QualityMenu(if (currentQuality == "Auto") vm.autoLabel() else currentQuality, q) { vm.setQuality(it) }
@@ -134,6 +143,7 @@ fun VideoScreen(
             vm.toggleSaved()
             Toast.makeText(context, if (saved) "Removed from Watch later" else "Saved to Watch later", Toast.LENGTH_SHORT).show()
         },
+        PlayerOption(QtIcons.PlaylistAdd, "Save to playlist") { savePlaylist = true },
         PlayerOption(QtIcons.Headphones, "Play in background") {
             vm.playInBackground()
             Toast.makeText(context, "Playing audio in background", Toast.LENGTH_SHORT).show()
@@ -143,7 +153,7 @@ fun VideoScreen(
     if (fullscreen) {
         VideoPlayerBox(vm.player, playback, Modifier.fillMaxSize(), fullscreen = true, onToggleFullscreen = { fullscreen = false },
             showPrevNext = false, onRetry = vm::retry, options = playerOptions, onPip = { leave(toPip = true) },
-            quality = qualityMenu, autoplay = appSettings.autoplayNext, onAutoplayChange = onAutoplay, onNext = nextVideo, upNext = upNext)
+            quality = qualityMenu, autoplay = autoplayOn, onAutoplayChange = onAutoplay, onNext = nextVideo, upNext = upNext, captions = captionMenu)
         return
     }
 
@@ -152,7 +162,7 @@ fun VideoScreen(
             if (details is LoadState.Success) {
                 VideoPlayerBox(vm.player, playback, Modifier.fillMaxSize(), onToggleFullscreen = { fullscreen = true },
                     onCollapse = { leave() }, showPrevNext = false, onRetry = vm::retry, options = playerOptions, onPip = { leave(toPip = true) },
-                    quality = qualityMenu, autoplay = appSettings.autoplayNext, onAutoplayChange = onAutoplay, onNext = nextVideo, upNext = upNext)
+                    quality = qualityMenu, autoplay = autoplayOn, onAutoplayChange = onAutoplay, onNext = nextVideo, upNext = upNext, captions = captionMenu)
             } else if (details is LoadState.Loading) PlayerLoading(previewThumbnail)
             IconButton(onClick = { leave() }, modifier = Modifier.align(Alignment.TopStart)) {
                 if (details !is LoadState.Success) Icon(QtIcons.ArrowBack, "Back", tint = Color.White)
@@ -165,6 +175,19 @@ fun VideoScreen(
                 val v = d.data
                 val comments by vm.comments.collectAsStateWithLifecycle()
                 LazyColumn(Modifier.weight(1f), contentPadding = WindowInsets.navigationBars.asPaddingValues()) {
+                    if (inQueue != null) item {
+                        Row(
+                            Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp).clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer).padding(horizontal = 12.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(QtIcons.PlaylistPlay, null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(20.dp))
+                            Text("${com.edureminder.quicktube.core.navigation.VideoQueue.name} · ${inQueue.first} / ${inQueue.second}" +
+                                if (queued == null) " · last video" else "",
+                                style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 8.dp))
+                        }
+                    }
                     item {
                         Row(Modifier.padding(start = 16.dp, top = 12.dp, end = 8.dp), verticalAlignment = Alignment.Top) {
                             Avatar(v.item.uploaderAvatar, 36, Modifier.clickable { v.item.uploaderUrl?.let(onChannel) })
@@ -189,10 +212,9 @@ fun VideoScreen(
                                 Toast.makeText(context, if (saved) "Removed from Watch later" else "Saved to Watch later", Toast.LENGTH_SHORT).show()
                             }, container = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.padding(start = 12.dp),
                                 tint = if (saved) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-                            QtIconButton(QtIcons.Headphones, "Play in background", {
-                                vm.playInBackground()
-                                Toast.makeText(context, "Playing audio in background", Toast.LENGTH_SHORT).show()
-                            }, container = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.padding(start = 8.dp))
+                            // Background play stays in the player's options; this place is for local playlists.
+                            QtIconButton(QtIcons.PlaylistAdd, "Save to playlist", { savePlaylist = true },
+                                container = MaterialTheme.colorScheme.surfaceContainerHigh, modifier = Modifier.padding(start = 8.dp))
                             QtIconButton(QtIcons.MoreVert, "More", { showAbout = true }, container = MaterialTheme.colorScheme.surfaceContainerHigh,
                                 modifier = Modifier.padding(start = 8.dp))
                         }
@@ -222,6 +244,7 @@ fun VideoScreen(
                     }
                 }
                 if (showAbout) AboutSheet(v, vm, onDismiss = { showAbout = false }, onChannel = onChannel)
+                if (savePlaylist) com.edureminder.quicktube.core.playerui.SaveToPlaylistSheet(v.item, isMusic = false) { savePlaylist = false }
                 if (showComments) CommentsSheet(vm, onDismiss = { showComments = false })
             }
         }

@@ -75,4 +75,50 @@ class FacebookReaderTest {
         assertNotNull(p)
         println("REAL: " + p!!.options.joinToString { "${it.title} ${it.totalSize}" })
     }
+
+    @Test
+    fun videoIdsOfReelAndVideoAddresses() {
+        assertEquals("2634990543581315", FacebookReader.videoId("https://m.facebook.com/reel/2634990543581315/?referral_source=native_in_feed_unit"))
+        assertEquals("1234567890", FacebookReader.videoId("https://www.facebook.com/somepage/videos/1234567890/"))
+        assertEquals("1234567890", FacebookReader.videoId("https://www.facebook.com/watch/?v=1234567890"))
+        assertEquals(null, FacebookReader.videoId("https://m.facebook.com/"))
+        assertEquals(null, FacebookReader.videoId("https://example.com/reel/2634990543581315/"))
+    }
+
+    /** A signed-in page: the data of several videos (next reels, the feed), each list followed by its video_id. */
+    private fun video(id: String, seconds: Int) =
+        """{"id":"$id","playable_duration_in_ms":${seconds * 1000}},{"representations":[${rep("a$id", "audio/mp4", "mp4a.40.5", 0, 0, 64000)},
+            ${rep("v$id", "video/mp4", "avc1.64001f", 720, 1280, 1200000)}],"video_id":"$id"}"""
+
+    private val signedInPage = "<html><script>[${video("1111111111", 15)},${video("2222222222", 26)},${video("3333333333", 195)}]</script></html>"
+
+    @Test
+    fun takesTheVideoTheAddressNames() {
+        val p = FacebookReader.parse(signedInPage, "https://m.facebook.com/reel/2222222222/?referral_source=feed", av1Playable = true)!!
+        val v = p.options.first { it.kind == FormatKind.VIDEO }
+        assertTrue(v.url.contains("v2222222222.mp4"))
+        assertTrue(v.audioUrl!!.contains("a2222222222.mp4"))
+        assertEquals(26.0, p.durationSec!!, 0.01)
+    }
+
+    @Test
+    fun aPostWithOtherVideosUnderItGivesNothing() {
+        // A photo post: the page's videos are the feed under it, none of them the post.
+        assertEquals(null, FacebookReader.parse(signedInPage, "https://www.facebook.com/61590775260449/posts/122142044991359175/", av1Playable = true))
+        // The named video isn't on the page.
+        assertEquals(null, FacebookReader.parse(signedInPage, "https://www.facebook.com/reel/9999999999/", av1Playable = true))
+    }
+
+    @Test
+    fun aPageWithOneVideoNeedsNoId() {
+        val p = FacebookReader.parse("<html><script>[${video("4444444444", 40)}]</script></html>", "https://www.facebook.com/somepage/posts/123/", av1Playable = true)!!
+        assertTrue(p.options.first { it.kind == FormatKind.VIDEO }.url.contains("v4444444444.mp4"))
+    }
+
+    @Test
+    fun captionsBecomeTidyTitles() {
+        assertEquals("Pretty 🔥❤️ | Aneet Padda Fanpage", FacebookReader.cleanTitle("Pretty 🔥❤️\n\n#aneetpadda #ahaanpnadey #saiyaara#foryou #life | Aneet Padda Fanpage"))
+        assertEquals("Wait for the end😂 | Taz's Vibe", FacebookReader.cleanTitle("Wait for the end😂\n.\n.\n.\n.\n #fbreels #trending #fyp | Taz's Vibe"))
+        assertEquals("আমি ছাড়া এটা আর কেউ না😆😆 | Suhasinee Mithu", FacebookReader.cleanTitle("আমি ছাড়া এটা আর কেউ না😆😆 | Suhasinee Mithu"))
+    }
 }

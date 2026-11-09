@@ -262,9 +262,22 @@ private fun Segmented(count: Int, selected: Int, onSelect: (Int) -> Unit, conten
 }
 
 @Composable
-fun SubtitleSheet(onSelect: () -> Unit, onDismiss: () -> Unit) {
+fun SubtitleSheet(
+    onSelect: () -> Unit,
+    onDismiss: () -> Unit,
+    /** Caption files saved with the video (e.g. "English"), each with whether it is showing. */
+    saved: List<Pair<String, Boolean>> = emptyList(),
+    onSaved: (Int?) -> Unit = {},
+    onStyle: () -> Unit = {},
+) {
     PlayerSheet(onDismiss) {
         SheetHeader("Subtitle", null)
+        SubtitleRow("Caption style  ›", false, onStyle)
+        if (saved.isNotEmpty()) {
+            SubtitleRow("Off", saved.none { it.second }) { onSaved(null) }
+            saved.forEachIndexed { i, (name, on) -> SubtitleRow(name, on) { onSaved(i) } }
+            HorizontalDivider(Modifier.padding(horizontal = 24.dp), color = Color.White.copy(alpha = 0.12f))
+        }
         Row(
             Modifier.fillMaxWidth().clickable(onClick = onSelect).padding(horizontal = 24.dp, vertical = 22.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -453,5 +466,16 @@ private fun GuideItem(icon: ImageVector, label: String, hint: String) {
         Icon(icon, null, tint = Color.White, modifier = Modifier.size(34.dp))
         Spacer(Modifier.height(18.dp))
         Text(label, color = Color.White, fontSize = 15.sp, textAlign = TextAlign.Center)
+    }
+}
+
+@Composable
+private fun SubtitleRow(name: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(name, color = Color.White, fontSize = 16.sp, modifier = Modifier.weight(1f))
+        if (selected) Icon(QtIcons.Check, null, tint = Color.White, modifier = Modifier.size(20.dp))
     }
 }

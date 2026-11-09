@@ -26,14 +26,17 @@ data class StreamCandidate(
 
 /**
  * Turns media URLs found on a page into download choices for *the* video the user is on:
- * declared quality lists are kept whole; anonymous sniffed streams are matched by duration (HLS) or size (files),
- * so hover previews and ads are dropped. Adds an audio-only choice like the native YouTube sheet.
+ * declared quality lists are kept whole; sniffed streams are matched by duration (HLS, and MP4 files whose header
+ * says how long they are) or size (other files), so hover previews, ads and other videos the page loaded are dropped. Adds an audio-only choice like the native YouTube sheet.
  */
 class StreamResolver(private val client: OkHttpClient, private val hls: HlsClient) {
     private val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true; isLenient = true }
 
     /** What happened while resolving (shown under "Technical details" when nothing is found). */
     class Result(val options: List<DownloadOption>, val report: List<String>)
+
+    /** A reachable file: its type, size (-1 unknown) and length read from its MP4 header (null unknown). */
+    private data class Probed(val candidate: StreamCandidate, val mime: String, val size: Long, val durationSec: Double? = null)
 
     suspend fun resolve(
         input: List<StreamCandidate>,
@@ -89,25 +92,31 @@ class StreamResolver(private val client: OkHttpClient, private val hls: HlsClien
         val hlsOptions = hlsUsable.flatMap { it.options }
 
         // ---- plain files ----
-        val probed = files.map { c ->
+        val reachable = files.map { c ->
             async {
                 probe(c, headers).also { r ->
-                    report += "file ${host(c.url)} → " + (r?.let { "${it.second.ifBlank { "?" }} ${it.third}B" } ?: "unreachable")
+                    report += "file ${host(c.url)} → " + (r?.let { "${it.mime.ifBlank { "?" }} ${it.size}B" + (it.durationSec?.let { d -> " ${d.toInt()}s" } ?: "") } ?: "unreachable")
                 }
                     // A declared quality stays even if the size check is refused; the download itself may still work.
-                    ?: if (c.label != null || c.height > 0) Triple(c, WebMediaFinder.mimeFor(c.url), -1L) else null
+                    ?: if (c.label != null || c.height > 0) Probed(c, WebMediaFinder.mimeFor(c.url), -1L) else null
             }
         }.awaitAll().filterNotNull()
             .filter { (_, mime, _) -> mime.isEmpty() || mime.startsWith("video") || mime.startsWith("audio") || mime.contains("octet-stream") || mime.contains("mp4") }
-        val labeledFiles = probed.filter { it.first.label != null || it.first.height > 0 }
+        // A file whose header gives a different length is another video the page loaded (Facebook keeps the feed's
+        // videos and prefetches the next ones while the address stays the same): never offer it for this one.
+        val probed = if (targetDurationSec == null || targetDurationSec <= 0) reachable
+        else reachable.filter { p -> p.durationSec == null || abs(p.durationSec - targetDurationSec) <= maxOf(3.0, targetDurationSec * 0.05) }
+            .also { kept -> if (kept.size < reachable.size) report += "files: ${reachable.size - kept.size} of another length than ${targetDurationSec.toInt()}s dropped" }
+        val labeledFiles = probed.filter { it.candidate.label != null || it.candidate.height > 0 }
         val anonymous = probed - labeledFiles.toSet()
-        val biggest = anonymous.maxOfOrNull { it.third } ?: 0
+        val biggest = anonymous.maxOfOrNull { it.size } ?: 0
         val anonymousKept = anonymous
             // Hover previews are a few hundred KB; drop them when a real file exists.
-            .filter { it.third < 0 || biggest < 3_000_000 || it.third >= biggest / 4 }
-            .sortedByDescending { it.third }
+            .filter { it.size < 0 || biggest < 3_000_000 || it.size >= biggest / 4 }
+            // The file with the right length first, then the biggest.
+            .sortedWith(compareBy({ it.durationSec == null }, { -it.size }))
             .take(if (labeledFiles.isEmpty()) 3 else 0)
-        val fileOptions = (labeledFiles + anonymousKept).mapIndexed { i, (c, mime, size) ->
+        val fileOptions = (labeledFiles + anonymousKept).mapIndexed { i, (c, mime, size, _) ->
             val m = if (mime.isBlank() || mime.contains("octet-stream")) WebMediaFinder.mimeFor(c.url) else mime.substringBefore(';').trim()
             val ext = WebMediaFinder.extFor(m)
             DownloadOption(
@@ -237,18 +246,53 @@ class StreamResolver(private val client: OkHttpClient, private val hls: HlsClien
     }
 
     /** (candidate, content-type, length) via a 1-byte range request. */
-    private suspend fun probe(c: StreamCandidate, headers: Map<String, String>): Triple<StreamCandidate, String, Long>? = withContext(Dispatchers.IO) {
+    /** Size and type, plus the length when the file starts with its MP4 header (web MP4s usually do). */
+    private suspend fun probe(c: StreamCandidate, headers: Map<String, String>): Probed? = withContext(Dispatchers.IO) {
         runCatching {
-            val req = Request.Builder().url(c.url).header("Range", "bytes=0-0").apply { headers.forEach { (k, v) -> header(k, v) } }.build()
+            val req = Request.Builder().url(c.url).header("Range", "bytes=0-${HEAD_BYTES - 1}").apply { headers.forEach { (k, v) -> header(k, v) } }.build()
             client.newCall(req).execute().use { r ->
                 if (!r.isSuccessful) return@use null
                 val len = r.header("Content-Range")?.substringAfter('/')?.toLongOrNull() ?: r.body.contentLength()
-                Triple(c, r.header("Content-Type").orEmpty(), len)
+                // A server that ignores the range sends the whole file: read just its beginning.
+                val head = r.body.source().let { src -> src.request(HEAD_BYTES.toLong()); src.buffer.copy().readByteArray(minOf(src.buffer.size, HEAD_BYTES.toLong())) }
+                Probed(c, r.header("Content-Type").orEmpty(), len, mp4DurationSec(head))
             }
         }.getOrNull()
     }
 
     companion object {
+        private const val HEAD_BYTES = 64 * 1024
+
+        /** The length in an MP4's header (moov → mvhd) within [head]; null when it isn't there (e.g. moov at the end). */
+        fun mp4DurationSec(head: ByteArray): Double? {
+            fun int(at: Int) = ((head[at].toLong() and 0xFF) shl 24) or ((head[at + 1].toLong() and 0xFF) shl 16) or
+                ((head[at + 2].toLong() and 0xFF) shl 8) or (head[at + 3].toLong() and 0xFF)
+            fun long(at: Int) = (int(at) shl 32) or int(at + 4)
+            fun type(at: Int) = String(head, at, 4, Charsets.ISO_8859_1)
+            /** Boxes in [from, to): finds [want] and returns its content start and end. */
+            fun find(want: String, from: Int, to: Int): IntRange? {
+                var at = from
+                while (at + 8 <= to) {
+                    var size = int(at)
+                    var header = 8
+                    if (size == 1L) { if (at + 16 > to) return null; size = long(at + 8); header = 16 }
+                    if (size == 0L) size = (to - at).toLong()
+                    if (size < header) return null
+                    if (type(at + 4) == want) return (at + header) until minOf(to.toLong(), at + size).toInt()
+                    if (at + size > to) return null
+                    at += size.toInt()
+                }
+                return null
+            }
+            return runCatching {
+                val moov = find("moov", 0, head.size) ?: return null
+                val mvhd = find("mvhd", moov.first, moov.last + 1) ?: return null
+                val v = mvhd.first
+                val (scale, duration) = if (head[v].toInt() == 1) int(v + 20) to long(v + 24) else int(v + 12) to int(v + 16)
+                if (scale <= 0 || duration <= 0 || duration == 0xFFFFFFFFL) null else duration.toDouble() / scale
+            }.getOrNull()
+        }
+
         fun isPlaylistUrl(u: String) = u.substringBefore('?').lowercase().let { it.endsWith(".m3u8") || it.endsWith(".m3u") } ||
             u.contains("mpegurl", ignoreCase = true)
 

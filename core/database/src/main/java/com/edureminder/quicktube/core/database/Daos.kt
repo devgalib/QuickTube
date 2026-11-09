@@ -43,13 +43,15 @@ interface DownloadDao {
 
     /**
      * An earlier download of the same video in the same quality: same page, or (Facebook gives a new share link
-     * each time) the same title from the same site. Items in the recycle bin don't count.
+     * each time) the same title from the same site, or the same media file ([file]: its address without the query).
+     * [title] null skips the title match (a generic one like "Facebook"). Items in the recycle bin don't count.
      */
     @Query(
         "SELECT * FROM downloads WHERE deletedAt = 0 AND quality IS :quality AND " +
-            "((:page IS NOT NULL AND pageUrl = :page) OR (title = :title AND sourceHost IS :host)) ORDER BY id DESC LIMIT 1",
+            "((:page IS NOT NULL AND pageUrl = :page) OR (:title IS NOT NULL AND title = :title AND sourceHost IS :host) OR " +
+            "(:file IS NOT NULL AND substr(url, 1, length(:file)) = :file)) ORDER BY id DESC LIMIT 1",
     )
-    suspend fun findSame(page: String?, title: String, host: String?, quality: String?): DownloadEntity?
+    suspend fun findSame(page: String?, title: String?, host: String?, quality: String?, file: String?): DownloadEntity?
 
     @Query("SELECT COUNT(*) FROM downloads WHERE filePath = :path")
     suspend fun countWithPath(path: String): Int
@@ -86,6 +88,12 @@ interface SiteDao {
 
     @Query("DELETE FROM sites WHERE id IN (:ids)")
     suspend fun delete(ids: List<Long>)
+
+    @Query("SELECT COUNT(*) FROM sites WHERE url = :url OR name = :name")
+    suspend fun countUrlOrName(url: String, name: String): Int
+
+    @Query("UPDATE sites SET name = :name WHERE url = :url AND builtIn = 1")
+    suspend fun renameBuiltIn(url: String, name: String)
 }
 
 @Dao
@@ -171,6 +179,9 @@ interface PlayHistoryDao {
 
     @Query("DELETE FROM play_history")
     suspend fun clear()
+
+    @Query("DELETE FROM play_history WHERE itemKey IN (:keys)")
+    suspend fun delete(keys: List<String>)
 }
 
 @Dao

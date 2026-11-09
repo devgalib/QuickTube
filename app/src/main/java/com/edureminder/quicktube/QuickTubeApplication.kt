@@ -53,6 +53,8 @@ class QuickTubeApplication : Application(), SingletonImageLoader.Factory {
             // Files already in the download folder (e.g. after a reinstall) show up in the library again.
             library.importFolder(get<SettingsRepository>().current().downloadDir)
         }
+        // Bulk downloads left unfinished when the app was closed carry on.
+        appScope.launch { get<com.edureminder.quicktube.core.downloadsheet.BulkDownloader>() }
         appScope.launch {
             // Unpack the site engine in the background, then refresh its site support every few days.
             val ytdlp = get<YtDlpExtractor>()

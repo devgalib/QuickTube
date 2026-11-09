@@ -80,7 +80,15 @@ class ShareActivity : ComponentActivity() {
     private fun openFrom(intent: Intent): Boolean {
         // A new share replaces the last one entirely: its invisible page must not reopen the sheet later.
         deep = null
-        val url = Urls.extractUrl(intent.getStringExtra(Intent.EXTRA_TEXT))
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)
+        // A shared list of links: bulk download, all of them into one folder.
+        val all = text?.let(Urls::extractUrls).orEmpty()
+        if (all.size > 1) {
+            startActivity(Intent(this, MainActivity::class.java).putExtra(MainActivity.EXTRA_BULK, all.joinToString("\n")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            finish()
+            return false
+        }
+        val url = Urls.extractUrl(text)
         if (url == null) {
             Toast.makeText(this, "No link found to download", Toast.LENGTH_SHORT).show()
             finish()

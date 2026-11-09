@@ -74,6 +74,10 @@ data class DownloadRequest(
     /** Download only this part of the video (both 0 = all of it). */
     val clipStartMs: Long = 0,
     val clipEndMs: Long = 0,
+    /** A photo post with music: its pictures, made into a video over [url] (the music). */
+    val images: List<String> = emptyList(),
+    /** A folder inside the download folder (a bulk download's name); null = the download folder itself. */
+    val folder: String? = null,
 )
 
 /** A download the user deleted permanently; kept so it can be downloaded again. */

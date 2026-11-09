@@ -25,6 +25,7 @@ interface MediaRepository {
     suspend fun details(url: String, forceRefresh: Boolean = false): VideoDetails
     suspend fun comments(url: String, page: Any? = null): Page<Comment>
     suspend fun channel(url: String, page: Any? = null): ChannelDetails
+    suspend fun channelTab(url: String, tab: com.edureminder.quicktube.core.model.ChannelTab, page: Any? = null): Page<MediaItem>
     suspend fun playlist(url: String, page: Any? = null): PlaylistDetails
     fun canExtract(url: String): Boolean
     /** VIDEO/CHANNEL/PLAYLIST when the URL is a supported page, null otherwise. */
@@ -90,8 +91,12 @@ interface PlaybackHistoryRepository {
     val entries: Flow<List<com.edureminder.quicktube.core.model.PlayHistoryEntry>>
     suspend fun all(): List<com.edureminder.quicktube.core.model.PlayHistoryEntry>
     /** Remembers [positionMs] for [key]; [opened] also marks it as just opened (for eviction order). */
-    suspend fun save(key: String, title: String, positionMs: Long, durationMs: Long, opened: Boolean = false)
+    suspend fun save(
+        key: String, title: String, positionMs: Long, durationMs: Long, opened: Boolean = false,
+        thumbnail: String? = null, uploader: String? = null,
+    )
     suspend fun clear()
+    suspend fun remove(keys: List<String>)
 
     companion object {
         const val MAX_ENTRIES = 300

@@ -4,7 +4,6 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.edureminder.quicktube.core.data.MediaRepository
 import com.edureminder.quicktube.core.model.MediaItem
-import com.edureminder.quicktube.core.model.MediaSection
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -19,12 +18,6 @@ data class FeedUi(
     val loadingMore: Boolean = false,
     val error: String? = null,
     val nextPage: Any? = null,
-)
-
-data class MusicUi(
-    val sections: List<MediaSection> = emptyList(),
-    val loading: Boolean = false,
-    val error: String? = null,
 )
 
 class HomeViewModel(
@@ -63,8 +56,6 @@ class HomeViewModel(
 
     private val _feed = MutableStateFlow(FeedUi())
     val feed: StateFlow<FeedUi> = _feed
-    private val _music = MutableStateFlow(MusicUi())
-    val music: StateFlow<MusicUi> = _music
 
     fun ensureFeed() {
         if (_feed.value.items.isEmpty() && !_feed.value.loading) loadFeed(false)
@@ -87,19 +78,6 @@ class HomeViewModel(
             runCatching { media.trending(s.nextPage) }
                 .onSuccess { p -> _feed.update { it.copy(items = (it.items + p.items).distinctBy { i -> i.url }, nextPage = p.nextPage, loadingMore = false) } }
                 .onFailure { _feed.update { it.copy(loadingMore = false, nextPage = null) } }
-        }
-    }
-
-    fun ensureMusic() {
-        if (_music.value.sections.isEmpty() && !_music.value.loading) loadMusic()
-    }
-
-    fun loadMusic() {
-        _music.value = MusicUi(loading = true)
-        viewModelScope.launch {
-            runCatching { media.musicHome() }
-                .onSuccess { _music.value = MusicUi(sections = it, error = if (it.isEmpty()) "Nothing to show right now" else null) }
-                .onFailure { e -> _music.value = MusicUi(error = e.message ?: "Error") }
         }
     }
 }

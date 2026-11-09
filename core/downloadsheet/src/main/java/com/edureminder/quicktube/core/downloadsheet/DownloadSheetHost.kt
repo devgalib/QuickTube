@@ -88,7 +88,7 @@ fun DownloadSheetHost(
     var cut by remember(t) { mutableStateOf<LongRange?>(null) }
     val durationMs = ui.durationSec * 1000
     var deepSearching by remember(t) { mutableStateOf(t is SheetTarget.Page && t.browserFirst && onDeepSearch != null) }
-    val notFound = !ui.loading && ui.options.isEmpty() && ui.error != null && !ui.isLive && t is SheetTarget.Page
+    val notFound = !ui.loading && ui.options.isEmpty() && ui.error != null && !ui.isLive && !ui.gone && t is SheetTarget.Page
     LaunchedEffect(t, notFound) {
         val page = ui.pageUrl ?: (t as? SheetTarget.Page)?.url
         if (!notFound || onDeepSearch == null || page == null) return@LaunchedEffect
@@ -143,8 +143,10 @@ fun DownloadSheetHost(
     }
     // A sensible choice is ready: ~720p video (or the best below it), else the first format.
     var selectedId by remember(t) { mutableStateOf<String?>(null) }
-    val cuttableOptions = ui.options.filter { it.protocol == com.edureminder.quicktube.core.model.StreamProtocol.HTTP && !it.extractAudio }
-    val choices = if (cut != null) cuttableOptions else ui.options
+    // Formats of one video get an MP3 choice too (a post's photos and videos don't).
+    val options = remember(ui.options, ui.items) { if (ui.items) ui.options else withMp3(ui.options) }
+    val cuttableOptions = options.filter { it.protocol == com.edureminder.quicktube.core.model.StreamProtocol.HTTP && !it.extractAudio && it.ext != "mp3" }
+    val choices = if (cut != null) cuttableOptions else options
     val selected = choices.firstOrNull { it.id == selectedId } ?: defaultChoice(choices)
     // A post's photos and videos: all of them ticked to start with.
     var picked by remember(t, ui.options) { mutableStateOf(ui.options.map { it.id }.toSet()) }
@@ -391,7 +393,11 @@ private fun SectionLabel(text: String) {
 
 /** One-line hint under a format in the full list (what it's good for). */
 private fun hint(o: DownloadOption): String = when {
-    o.kind == FormatKind.AUDIO -> if (o.ext == "m4a") "M4A, best choice for phones" else "${o.ext.uppercase()} audio"
+    o.kind == FormatKind.AUDIO -> when (o.ext) {
+        "m4a" -> "M4A, best choice for phones"
+        "mp3" -> "MP3, plays on every device"
+        else -> "${o.ext.uppercase()} audio"
+    }
     o.height in 1..480 -> "Normal quality, saves data"
     o.height in 481..720 -> "Clear view, quick to download"
     o.height in 721..1100 -> "Sharp detail for full screen"

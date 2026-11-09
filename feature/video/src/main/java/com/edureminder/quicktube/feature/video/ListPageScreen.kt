@@ -33,6 +33,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
+import com.edureminder.quicktube.core.model.ChannelTab
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -83,7 +86,8 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
     var selecting by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf(setOf<String>()) }
     var asking by remember { mutableStateOf<BatchScope?>(null) }
-    val videos = ui.items.filter { it.kind == ItemKind.VIDEO }
+    // Only a list (a playlist or a channel tab) can be downloaded or selected from, not Home or About.
+    val videos = if (ui.section == null || ui.section is ChannelSection.Tab) ui.items.filter { it.kind == ItemKind.VIDEO } else emptyList()
 
     fun start(scope: BatchScope, quality: BatchQuality) {
         when (scope) {
@@ -158,6 +162,7 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
             ui.error != null -> ErrorBox(ui.error!!, vm::retry, mod)
             else -> {
                 val state = rememberLazyListState()
+                val scope = rememberCoroutineScope()
                 state.OnNearEnd { vm.loadMore() }
                 LazyColumn(mod, state = state, contentPadding = PaddingValues(bottom = 16.dp)) {
                     ui.header?.let { h ->
@@ -172,7 +177,7 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
                                         Text(h.subtitle(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
                                 }
-                                ui.description?.takeIf { it.isNotBlank() }?.let {
+                                ui.description?.takeIf { it.isNotBlank() && ui.sections.isEmpty() }?.let {
                                     Text(it, maxLines = 3, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall,
                                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
                                 }
@@ -186,8 +191,23 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
                             }
                         }
                     }
-                    if (ui.items.isEmpty()) item { EmptyBox("No videos", modifier = Modifier.fillMaxWidth()) }
-                    items(ui.items, key = { it.url }) { item ->
+                    if (ui.sections.isNotEmpty()) stickyHeader(key = "tabs") {
+                        ChannelTabs(ui.sections, ui.section) { vm.select(it); if (state.firstVisibleItemIndex > 1) scope.launch { state.scrollToItem(1) } }
+                    }
+                    when (val section = ui.section) {
+                        ChannelSection.Home -> channelHome(ui, onOpen = onOpen, onDownload = { sheet.open(it) }, onSeeAll = { vm.select(ChannelSection.Tab(it)) })
+                        ChannelSection.About -> item(key = "about") { ChannelAbout(ui) }
+                        is ChannelSection.Tab -> if (ui.tabLoading) item(key = "tab-loading") { FooterLoading() }
+                        else if (section.tab == ChannelTab.SHORTS && !selecting) {
+                            if (ui.items.isEmpty()) item { EmptyBox("No Shorts", modifier = Modifier.fillMaxWidth()) }
+                            shortsGrid(ui.items, onOpen = onOpen, onDownload = { sheet.open(it) })
+                        }
+                        null -> Unit
+                    }
+                    val showsList = ui.section == null || ui.section is ChannelSection.Tab && !ui.tabLoading &&
+                        ((ui.section as ChannelSection.Tab).tab != ChannelTab.SHORTS || selecting)
+                    if (showsList && ui.items.isEmpty()) item { EmptyBox("No videos", modifier = Modifier.fillMaxWidth()) }
+                    if (showsList) items(ui.items, key = { it.url }) { item ->
                         val selectable = selecting && item.kind == ItemKind.VIDEO
                         val isSelected = item.url in selected
                         Row(verticalAlignment = Alignment.CenterVertically) {

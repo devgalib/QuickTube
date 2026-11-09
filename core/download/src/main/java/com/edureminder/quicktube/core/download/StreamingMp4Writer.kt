@@ -35,7 +35,8 @@ internal class StreamingMp4Writer(
     private val mdatStart: Long
     private val tracks = run {
         Mp4Moov.clearTemp()
-        formats.mapIndexed { i, f -> TrackState(i + 1, f, rotation, clipDurationUs) }
+        // VP9 from WebM (YouTube's 1440p and up) lacks the configuration MP4 needs; it is filled in here.
+        formats.mapIndexed { i, f -> TrackState(i + 1, Vp9Config.ensure(f), rotation, clipDurationUs) }
     }
 
     init {

@@ -24,11 +24,13 @@ class FacebookReader(private val client: OkHttpClient) : UniversalExtractor {
 
     override suspend fun extract(url: String, headers: Map<String, String>): ExtractedPage? = withContext(Dispatchers.IO) {
         if (!isFacebook(url)) return@withContext null
-        val html = runCatching { fetch(url, headers["Cookie"]) }.getOrNull() ?: return@withContext null
-        parse(html, url)
+        val (html, finalUrl) = runCatching { fetch(url, headers["Cookie"]) }.getOrNull() ?: return@withContext null
+        // A share link redirects to the post, reel or video it stands for: that address says which video is meant.
+        parse(html, finalUrl)
     }
 
-    private fun fetch(url: String, cookie: String?): String? {
+    /** The page and the address it ended on after redirects. */
+    private fun fetch(url: String, cookie: String?): Pair<String, String>? {
         val req = Request.Builder().url(url)
             .header("User-Agent", DESKTOP_UA)
             .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
@@ -39,7 +41,7 @@ class FacebookReader(private val client: OkHttpClient) : UniversalExtractor {
             .header("Upgrade-Insecure-Requests", "1")
             .apply { cookie?.let { header("Cookie", it) } }
             .build()
-        return client.newCall(req).execute().use { r -> if (r.isSuccessful) r.body.string() else null }
+        return client.newCall(req).execute().use { r -> if (r.isSuccessful) r.body.string() to r.request.url.toString() else null }
     }
 
     companion object {
@@ -50,10 +52,30 @@ class FacebookReader(private val client: OkHttpClient) : UniversalExtractor {
             return host == "fb.watch" || host == "facebook.com" || host.endsWith(".facebook.com")
         }
 
-        /** Options from a Facebook page's HTML (pure, unit-tested). [av1Playable]: this phone can play AV1. */
+        /** The id of the one reel or video a Facebook address is about (/reel/…, /videos/…, ?v=…); null for feeds. */
+        fun videoId(url: String): String? {
+            if (!isFacebook(url)) return null
+            return Regex("""/(?:reel|reels|videos)/(?:[^/?#]+/)?(\d{6,})|[?&](?:v|video_id)=(\d{6,})""").find(url)
+                ?.groupValues?.drop(1)?.firstOrNull { it.isNotEmpty() }
+        }
+
+        /**
+         * Options from a Facebook page's HTML (pure, unit-tested). [av1Playable]: this phone can play AV1.
+         * Signed-in pages carry the data of many videos (the next reels, the feed under a post), each quality list
+         * followed by its "video_id": only the video the address names is used. A page with several videos and an
+         * address that names none (a post) gives nothing rather than someone else's video.
+         */
         fun parse(html: String, pageUrl: String, av1Playable: Boolean = DeviceCodecs.canDecodeAv1): ExtractedPage? {
-            val reps = firstArray(html, "\"representations\":")?.let { runCatching { JSONArray(it) }.getOrNull() }
-            val duration = Regex(""""playable_duration_in_ms":(\d+)""").find(html)?.groupValues?.get(1)?.toDoubleOrNull()?.div(1000)
+            val blocks = qualityLists(html)
+            val ids = blocks.mapNotNull { it.second }.distinct()
+            val wanted = videoId(pageUrl) ?: ids.singleOrNull()
+            if (wanted == null && ids.size > 1) return null
+            // Pages without ids (signed out) hold just the one video.
+            val chosen = if (wanted == null || ids.isEmpty()) blocks.firstOrNull() else blocks.firstOrNull { it.second == wanted }
+            if (wanted != null && chosen == null && ids.isNotEmpty()) return null // this video's data isn't on the page
+            val reps = chosen?.first?.let { runCatching { JSONArray(it) }.getOrNull() }
+            // The page's first length belongs to its first video: fine when that's the one chosen.
+            val duration = (durationMs(html, wanted) ?: durationMs(html, null).takeIf { chosen == null || chosen == blocks.first() })?.div(1000)
             val options = mutableListOf<DownloadOption>()
             val headers = mapOf("User-Agent" to DESKTOP_UA, "Referer" to "https://www.facebook.com/")
 
@@ -111,8 +133,8 @@ class FacebookReader(private val client: OkHttpClient) : UniversalExtractor {
                     )
                 }
             }
-            // The ready-made files (video + sound in one), when the page has no quality ladder.
-            if (options.none { it.kind == FormatKind.VIDEO }) {
+            // The ready-made files (video + sound in one), when the page has no quality ladder (and only one video).
+            if (options.none { it.kind == FormatKind.VIDEO } && ids.size <= 1) {
                 listOf("browser_native_sd_url" to "Standard (SD)", "browser_native_hd_url" to "High quality (HD)").forEach { (key, label) ->
                     jsonString(html, key)?.let { u ->
                         options += DownloadOption(
@@ -125,10 +147,23 @@ class FacebookReader(private val client: OkHttpClient) : UniversalExtractor {
             if (options.none { it.kind == FormatKind.VIDEO }) return null
             val title = meta(html, "og:title")?.let(::htmlDecode)
                 ?.replace(Regex("""^(?:[\d.,]+[KMB]?\s+(?:views?|reactions?|comments?|shares?|plays?)\s*[·•]?\s*)+\|\s*"""), "")
-                ?.removeSuffix(" | Facebook")?.takeIf { it.isNotBlank() && it != "Facebook" }
+                ?.removeSuffix(" | Facebook")?.let(::cleanTitle)?.takeIf { it.isNotBlank() && it != "Facebook" }
                 ?: "Facebook video"
             return ExtractedPage(title, meta(html, "og:image")?.let(::htmlDecode), duration, options, headers)
         }
+
+        /**
+         * A caption as a title: one line, without the dot-only lines and hashtags people pad captions with
+         * ("Pretty 🔥\n.\n.\n#reels #fyp | Page" → "Pretty 🔥 | Page").
+         */
+        internal fun cleanTitle(raw: String): String = raw.lines()
+            .filterNot { it.isBlank() || it.trim().all { c -> c in ".·•_-–—…" } }
+            .joinToString(" ")
+            .replace(Regex("""#[\p{L}\p{N}\p{M}_]+"""), " ")
+            .replace(Regex("""\s+"""), " ")
+            .replace(Regex("""(?:\s*\|)+\s*"""), " | ")
+            .trim(' ', '|', '.', '·', '-', '_')
+            .trim()
 
         private val RUNGS = intArrayOf(144, 240, 360, 480, 540, 640, 720, 840, 960, 1080, 1440, 2160)
 
@@ -146,9 +181,37 @@ class FacebookReader(private val client: OkHttpClient) : UniversalExtractor {
             }
         }
 
-        /** The JSON array that follows the first [key] (bracket-matched, strings respected). */
-        private fun firstArray(html: String, key: String): String? {
-            val start = html.indexOf(key).takeIf { it >= 0 }?.let { html.indexOf('[', it) } ?: return null
+        /** Every "representations" quality list with the video_id that follows it (null when there is none). */
+        private fun qualityLists(html: String): List<Pair<String, String?>> {
+            val key = "\"representations\":"
+            val out = mutableListOf<Pair<String, String?>>()
+            var from = 0
+            while (true) {
+                val at = html.indexOf(key, from).takeIf { it >= 0 } ?: break
+                val open = html.indexOf('[', at).takeIf { it >= 0 } ?: break
+                val array = arrayAt(html, open) ?: break
+                val end = open + array.length
+                val id = Regex(""""video_id":"(\d+)"""").find(html.substring(end, minOf(html.length, end + 2000)))?.groupValues?.get(1)
+                out += array to id
+                from = end
+            }
+            return out
+        }
+
+        /** The length of [videoId] (near its id), or the page's only length when no id is known. */
+        private fun durationMs(html: String, videoId: String?): Double? {
+            val length = Regex(""""playable_duration_in_ms":(\d+)""")
+            if (videoId == null) return length.find(html)?.groupValues?.get(1)?.toDoubleOrNull()
+            return Regex(""""$videoId"""").findAll(html).firstNotNullOfOrNull { m ->
+                val from = maxOf(0, m.range.first - 1500)
+                // The closest one: a neighbouring video's length can be in the same stretch.
+                length.findAll(html.substring(from, minOf(html.length, m.range.last + 1500)))
+                    .minByOrNull { kotlin.math.abs(from + it.range.first - m.range.first) }?.groupValues?.get(1)?.toDoubleOrNull()
+            }
+        }
+
+        /** The JSON array starting at [start] (bracket-matched, strings respected). */
+        private fun arrayAt(html: String, start: Int): String? {
             var depth = 0
             var inString = false
             var i = start

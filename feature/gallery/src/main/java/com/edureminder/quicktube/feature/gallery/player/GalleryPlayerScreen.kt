@@ -221,6 +221,9 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
         val path = current?.path ?: return@LaunchedEffect
         if (savedCaptions.isEmpty() || captionOn != null || !appSettings.current().autoSubtitles) return@LaunchedEffect
         val f = com.edureminder.quicktube.core.common.SubtitleSidecars.preferred(java.io.File(path), savedCaptions.map { it.second }) ?: return@LaunchedEffect
+        // Usually the queue already started the video with them (no second load of the file): just show them as on.
+        val queued = controller.state.value.queue.firstOrNull { it.id == "gallery:${current?.id}" }
+        if (queued?.subtitleUri == android.net.Uri.fromFile(f).toString()) { captionOn = f.path; return@LaunchedEffect }
         // The item has to be playing before captions can be added to it.
         kotlinx.coroutines.delay(400)
         captionOn = f.path

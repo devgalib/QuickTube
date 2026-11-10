@@ -19,6 +19,7 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.Renderer
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
 import androidx.media3.exoplayer.video.VideoRendererEventListener
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.MediaSource
@@ -54,15 +55,16 @@ class PlaybackService : MediaSessionService() {
         val renderers = FallbackRenderersFactory(this)
             .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON)
             .setEnableDecoderFallback(true)
-        val player = ExoPlayer.Builder(this, renderers)
-            .setMediaSourceFactory(SplitStreamSourceFactory(DefaultMediaSourceFactory(dataSource, LongMp4ExtractorsFactory(this)), dataSource))
+        val sources = SplitStreamSourceFactory(DefaultMediaSourceFactory(dataSource, LongMp4ExtractorsFactory(this)), dataSource)
+        // Files next to the playing one are kept ready, so switching between them (the gallery's strip) is instant.
+        val preload = NeighbourPreloader(this, sources, renderers).also { preloader = it }
+        val player = preload.buildPlayer(ExoPlayer.Builder(this, renderers)
             .setAudioAttributes(
                 AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(),
                 true,
             )
             .setHandleAudioBecomingNoisy(true)
-            .setWakeMode(C.WAKE_MODE_NETWORK)
-            .build()
+            .setWakeMode(C.WAKE_MODE_NETWORK))
         val launch = packageManager.getLaunchIntentForPackage(packageName)!!
             .putExtra("open", "player")
             .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
@@ -96,6 +98,8 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         exo = null
+        preloader?.release()
+        preloader = null
         session?.run {
             player.release()
             release()
@@ -132,6 +136,7 @@ class PlaybackService : MediaSessionService() {
          */
         @Volatile
         internal var exo: ExoPlayer? = null
+        internal var preloader: NeighbourPreloader? = null
 
         const val EXTRA_AUDIO_URI = "audio_uri"
         const val EXTRA_ID = "item_id"
@@ -177,6 +182,33 @@ private class FallbackRenderersFactory(context: Context) : DefaultRenderersFacto
             context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback, eventHandler, eventListener,
             allowedVideoJoiningTimeMs, out,
         )
+        // The phone's decoders, with frames a little late shown rather than dropped (same settings as the default).
+        val i = out.indexOfFirst { it.javaClass == MediaCodecVideoRenderer::class.java }
+        if (i >= 0) out[i] = LenientVideoRenderer(
+            MediaCodecVideoRenderer.Builder(context)
+                .setMediaCodecSelector(mediaCodecSelector)
+                .setAllowedJoiningTimeMs(allowedVideoJoiningTimeMs)
+                .setEnableDecoderFallback(enableDecoderFallback)
+                .setEventHandler(eventHandler)
+                .setEventListener(eventListener)
+                .setMaxDroppedFramesToNotify(MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY),
+        )
         out += FfmpegVideoRenderer(allowedVideoJoiningTimeMs, eventHandler, eventListener, MAX_DROPPED_VIDEO_FRAME_COUNT_TO_NOTIFY)
+    }
+}
+
+/**
+ * Shows a decoded frame up to [LATE_LIMIT_US] late instead of dropping it after Media3's 30 ms. A decoder working at
+ * its limit (1080p60 on a budget phone) delivers many frames slightly late; dropping all of them halved the frame
+ * rate (28 fps shown against 45 in the phone's own VLC-based player, which shows late frames too). Frames later than
+ * that are still dropped, and Media3 still skips ahead to the next key frame when video falls far behind.
+ */
+@UnstableApi
+private class LenientVideoRenderer(builder: MediaCodecVideoRenderer.Builder) : MediaCodecVideoRenderer(builder) {
+    override fun shouldDropFrame(earlyUs: Long, elapsedSinceLastReleaseUs: Long, isLastFrame: Boolean) =
+        earlyUs < -LATE_LIMIT_US && !isLastFrame
+
+    private companion object {
+        const val LATE_LIMIT_US = 100_000L
     }
 }

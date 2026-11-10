@@ -15,6 +15,7 @@ import androidx.media3.common.text.CueGroup
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlaybackException
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.MoreExecutors
@@ -146,7 +147,14 @@ class PlayerController(
         c.shuffleModeEnabled = false
         PlaybackService.exo?.pauseAtEndOfMediaItems = false
         if (_sleep.value == SLEEP_STOPPED) _sleep.value = SLEEP_OFF
-        c.setMediaItems(items.map { it.toMediaItem() }, startIndex, first?.let(::startPosition) ?: 0)
+        val start = first?.let(::startPosition) ?: 0
+        if (start > 0) resumeAtKeyframe(startSeek = true)
+        // The preloader ranks items by queue position and preloads each where it will start.
+        PlaybackService.preloader?.run {
+            newQueue(items.withIndex().associate { (i, item) -> item.id to i })
+            startOf = { id -> queue.firstOrNull { it.id == id }?.let(::startPosition) ?: 0 }
+        }
+        c.setMediaItems(items.map { it.toMediaItem() }, startIndex, start)
         c.playbackParameters = PlaybackParameters(prefs.playbackSpeed)
         first?.let { markOpened(it) }
         setAudioOnlyInternal(c, audioOnly || items.getOrNull(startIndex)?.isVideo == false)
@@ -203,12 +211,23 @@ class PlayerController(
     fun resume() = withController { it.play() }
     fun seekTo(ms: Long) = withController { it.seekTo(ms) }
     fun seekBy(deltaMs: Long) = withController { it.seekTo((it.currentPosition + deltaMs).coerceAtLeast(0)) }
-    fun next() = withController { if (it.hasNextMediaItem()) { it.seekToNextMediaItem(); recover(it) } }
+    fun next() = withController { if (it.hasNextMediaItem()) { switchTo(it, it.nextMediaItemIndex); recover(it) } }
     fun previous() = withController {
-        if (it.currentPosition > 3000 || !it.hasPreviousMediaItem()) it.seekTo(0) else it.seekToPreviousMediaItem()
+        if (it.currentPosition > 3000 || !it.hasPreviousMediaItem()) it.seekTo(0) else switchTo(it, it.previousMediaItemIndex)
         recover(it)
     }
-    fun skipTo(index: Int) = withController { it.seekToDefaultPosition(index); recover(it); it.play() }
+    fun skipTo(index: Int) = withController { switchTo(it, index); recover(it); it.play() }
+
+    /**
+     * Goes straight to where [index] resumes, in one seek: going to its start and then on to the saved spot would
+     * load it twice, and the preloader's buffered copy only matches the exact spot it was preloaded at.
+     */
+    private fun switchTo(c: MediaController, index: Int) {
+        val item = queue.getOrNull(index)
+        val at = item?.let { PlaybackService.preloader?.startFor(it.id) ?: startPosition(it) } ?: 0
+        if (at > 0) resumeAtKeyframe(startSeek = false)
+        c.seekTo(index, at)
+    }
 
     /**
      * Plays the current item again from where it was, choosing its tracks afresh: after [VideoDecoderPack] is installed,
@@ -311,6 +330,33 @@ class PlayerController(
         }
     }
 
+    /**
+     * Resuming starts at the key frame before the saved spot, not exactly on it: an exact start has to decode
+     * everything from that key frame first, and a long 1080p video's key frames can be 7 s apart (seconds of black).
+     * Seek parameters only apply to seeks, so a start position from [play] is sought again ([startSeek]) as soon as
+     * the file's length is known, before anything is decoded. Back to exact seeking (±10 s, the seek bar) once ready.
+     */
+    private fun resumeAtKeyframe(startSeek: Boolean) {
+        val exo = PlaybackService.exo ?: return
+        keyframeResume?.let { exo.removeListener(it) }
+        exo.setSeekParameters(SeekParameters.PREVIOUS_SYNC)
+        var sought = !startSeek
+        keyframeResume = object : Player.Listener {
+            override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+                if (!sought && exo.isCurrentMediaItemSeekable && exo.duration != C.TIME_UNSET) { sought = true; exo.seekTo(exo.currentPosition) }
+            }
+            override fun onPlaybackStateChanged(state: Int) { if (state == Player.STATE_READY) done() }
+            override fun onRenderedFirstFrame() = done()
+            private fun done() {
+                if (!sought || keyframeResume !== this) return
+                exo.setSeekParameters(SeekParameters.DEFAULT)
+                exo.removeListener(this)
+                keyframeResume = null
+            }
+        }.also { exo.addListener(it) }
+    }
+    private var keyframeResume: Player.Listener? = null
+
     /** Where [item] starts: its own start position, else where it was left last time (Settings → Player → Resume). */
     private fun startPosition(item: PlayItem): Long = when {
         item.startPositionMs > 0 -> item.startPositionMs
@@ -346,8 +392,12 @@ class PlayerController(
             val next = queue.firstOrNull { it.id == mediaItem?.mediaId } ?: return
             markOpened(next)
             if (reason != Player.MEDIA_ITEM_TRANSITION_REASON_REPEAT) {
-                val at = startPosition(next)
-                if (at > 0) _player.value?.seekTo(at)
+                val at = PlaybackService.preloader?.startFor(next.id) ?: startPosition(next)
+                // The service's player directly (same process): seeking through the session could land after it's ready.
+                // Skips from here already start there ([switchTo]); this covers the rest (playing on, notification buttons).
+                val exo = PlaybackService.exo
+                val there = exo != null && kotlin.math.abs(exo.currentPosition - at) < 1_500
+                if (at > 0 && !there) { resumeAtKeyframe(startSeek = false); exo?.seekTo(at) ?: _player.value?.seekTo(at) }
             }
         }
         override fun onIsPlayingChanged(isPlaying: Boolean) {

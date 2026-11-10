@@ -146,7 +146,10 @@ internal class LongMp4Extractor(
                 if (size - headerSize <= DELEGATE_MAX_MOOV) {
                     delegate.init(output)
                     state = State.Delegate
-                    seekPosition.position = 0
+                    // Straight to the moov: from the start, Mp4Extractor would walk every box before it, and a file
+                    // QuickTube merged in place has hundreds (seconds of reopening the file before the first frame).
+                    // QuickTime files start from the top, as their ftyp changes how Mp4Extractor reads the moov.
+                    seekPosition.position = if (isQuickTime) 0 else start
                     return Extractor.RESULT_SEEK
                 }
                 parseMoov(input, start + size)

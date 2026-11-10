@@ -35,6 +35,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
+import com.edureminder.quicktube.core.common.SubtitleSidecars
 
 /** How the video fills the screen; cycled by the aspect button like the system player. */
 enum class AspectMode(val label: String) { FIT("Fit to Screen"), STRETCH("Stretch"), CROP("Crop") }
@@ -119,7 +120,10 @@ class GalleryPlayerViewModel(
             val from = (at - QUEUE / 2).coerceAtLeast(0)
             val queue = videos.subList(from, minOf(videos.size, from + QUEUE)).toList()
             if (queue.isEmpty()) return@launch
-            controller.play(queue.map { it.toPlayItem() }, at - from, audioOnly = media.isAudio)
+            // Saved captions go in with each item: adding them once it plays would make the player load the file
+            // a second time, which for a long video doubles the wait before the first frame.
+            val captions = if (settings.current().autoSubtitles) withContext(Dispatchers.IO) { savedCaptions(queue) } else emptyMap()
+            controller.play(queue.map { it.toPlayItem(captions[it.id]) }, at - from, audioOnly = media.isAudio)
             controller.setVolume(1f)
             // Settings → Player → When a video ends (also changed from the player's own menu).
             val mode = settings.current().videoEndMode.toPlayMode().forAudio(media.isAudio)
@@ -248,10 +252,26 @@ class GalleryPlayerViewModel(
         timerJob?.cancel()
     }
 
-    private fun GalleryMedia.toPlayItem() = PlayItem(
+    private fun GalleryMedia.toPlayItem(captions: File? = null) = PlayItem(
         id = "gallery:$id", uri = uri.toString(), title = name.substringBeforeLast('.'), artist = artist, isVideo = !isAudio,
         historyKey = path.ifBlank { null },
+        subtitleUri = captions?.let { android.net.Uri.fromFile(it).toString() },
     )
+
+    /** Each video's caption file to show from the start (the phone's language first), from one listing per folder. */
+    private fun savedCaptions(queue: List<GalleryMedia>): Map<Long, File> {
+        val byFolder = HashMap<File, List<File>>()
+        return queue.filter { !it.isAudio && it.path.isNotBlank() }.mapNotNull { m ->
+            val video = File(m.path)
+            val folder = video.parentFile ?: return@mapNotNull null
+            val all = byFolder.getOrPut(folder) {
+                folder.listFiles { f -> f.isFile && f.extension.lowercase() in setOf("srt", "vtt") }?.toList().orEmpty()
+            }
+            val base = video.nameWithoutExtension
+            val mine = all.filter { it.nameWithoutExtension == base || it.nameWithoutExtension.startsWith("$base.") }.sortedBy { it.name }
+            SubtitleSidecars.preferred(video, mine)?.let { m.id to it }
+        }.toMap()
+    }
 
     private fun VideoEndMode.toPlayMode() = PlayMode.valueOf(name)
 

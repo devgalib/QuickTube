@@ -1,8 +1,8 @@
 package com.edureminder.quicktube.feature.video
 
-import android.widget.Toast
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
+import com.edureminder.quicktube.core.ui.readableWidth
+import com.edureminder.quicktube.core.ui.rememberToaster
+import com.edureminder.quicktube.core.ui.show
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
@@ -40,11 +40,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.edureminder.quicktube.core.common.Permissions
 import com.edureminder.quicktube.core.designsystem.PillButton
 import com.edureminder.quicktube.core.designsystem.QtIconButton
 import com.edureminder.quicktube.core.designsystem.QtTopBar
@@ -81,7 +79,8 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
     val sheet = koinInject<DownloadSheetController>()
     val batch = koinInject<BatchDownloader>()
     val batchState by batch.state.collectAsStateWithLifecycle()
-    val context = LocalContext.current
+    val toast = rememberToaster()
+    val storage = com.edureminder.quicktube.core.ui.rememberStorageAccess()
 
     var selecting by rememberSaveable { mutableStateOf(false) }
     var selected by remember { mutableStateOf(setOf<String>()) }
@@ -96,7 +95,7 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
         }
         selecting = false
         selected = emptySet()
-        Toast.makeText(context, "Adding to downloads…", Toast.LENGTH_SHORT).show()
+        toast.show("Adding to downloads…")
     }
 
     val localPlaylists = koinInject<com.edureminder.quicktube.core.data.LocalPlaylistRepository>()
@@ -110,11 +109,13 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
 
     // Android 10 and older need storage permission before saving into Downloads.
     var pendingQuality by remember { mutableStateOf<Pair<BatchScope, BatchQuality>?>(null) }
-    val storageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        val p = pendingQuality ?: return@rememberLauncherForActivityResult
-        pendingQuality = null
-        if (result.values.all { it }) start(p.first, p.second)
-        else Toast.makeText(context, "Storage permission is needed to save downloads", Toast.LENGTH_LONG).show()
+    val askStorage = {
+        storage.request { granted ->
+            val p = pendingQuality
+            pendingQuality = null
+            if (!granted) toast.show("Storage permission is needed to save downloads", true)
+            else if (p != null) start(p.first, p.second)
+        }
     }
 
     // Tell the user how the batch went once it finishes.
@@ -125,7 +126,7 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
                 append("${batchState.added} added to downloads")
                 if (batchState.failed > 0) append(" · ${batchState.failed} unavailable")
             }
-            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            toast.show(msg, true)
         }
         wasRunning = batchState.running
     }
@@ -165,7 +166,7 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
             }
         },
     ) { pad ->
-        val mod = Modifier.fillMaxSize().padding(pad)
+        val mod = Modifier.fillMaxSize().padding(pad).readableWidth(1000.dp)
         when {
             ui.loading -> LoadingBox(mod)
             ui.error != null -> ErrorBox(ui.error!!, vm::retry, mod)
@@ -173,7 +174,10 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
                 val state = rememberLazyListState()
                 val scope = rememberCoroutineScope()
                 state.OnNearEnd { vm.loadMore() }
-                LazyColumn(mod, state = state, contentPadding = PaddingValues(bottom = 16.dp)) {
+                androidx.compose.foundation.layout.BoxWithConstraints(mod) {
+                // Shorts: two to a row on phones, up to six on wide windows (each stays about 160–220dp wide).
+                val shortColumns = (maxWidth / 180.dp).toInt().coerceIn(2, 6)
+                LazyColumn(Modifier.fillMaxSize(), state = state, contentPadding = PaddingValues(bottom = 16.dp)) {
                     ui.header?.let { h ->
                         item {
                             Column {
@@ -217,7 +221,7 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
                                     QtIconButton(QtIcons.PlaylistAdd, "Save to my playlists", {
                                         scopeSave.launch {
                                             val r = runCatching { localPlaylists.import(url, isMusic = false) }
-                                            Toast.makeText(context, if (r.isSuccess) "Saved to your playlists" else "Couldn't save this playlist", Toast.LENGTH_SHORT).show()
+                                            toast.show(if (r.isSuccess) "Saved to your playlists" else "Couldn't save this playlist")
                                         }
                                     }, container = MaterialTheme.colorScheme.surfaceContainerHigh)
                                 }
@@ -240,7 +244,7 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
                         is ChannelSection.Tab -> if (ui.tabLoading) item(key = "tab-loading") { FooterLoading() }
                         else if (section.tab == ChannelTab.SHORTS && !selecting) {
                             if (ui.items.isEmpty()) item { EmptyBox("No Shorts", modifier = Modifier.fillMaxWidth()) }
-                            shortsGrid(ui.items, onOpen = onOpen, onDownload = { sheet.open(it) })
+                            shortsGrid(ui.items, shortColumns, onOpen = onOpen, onDownload = { sheet.open(it) })
                         }
                         null -> Unit
                     }
@@ -274,6 +278,7 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
                     }
                     if (ui.loadingMore) item { FooterLoading() }
                 }
+                }
             }
         }
     }
@@ -285,9 +290,9 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
         }
         QualitySheet(count, onDismiss = { asking = null }) { quality ->
             asking = null
-            if (!Permissions.granted(context, Permissions.storageWrite)) {
+            if (!storage.granted()) {
                 pendingQuality = scope to quality
-                storageLauncher.launch(Permissions.storageWrite)
+                askStorage()
             } else start(scope, quality)
         }
     }

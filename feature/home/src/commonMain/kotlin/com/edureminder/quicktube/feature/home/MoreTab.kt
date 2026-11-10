@@ -1,5 +1,7 @@
 package com.edureminder.quicktube.feature.home
 
+import com.edureminder.quicktube.core.ui.isMobilePlatform
+import com.edureminder.quicktube.core.ui.readableWidth
 import com.edureminder.quicktube.core.designsystem.LocalBottomBarHeight
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -38,15 +40,15 @@ private class Shortcut(val title: String, val hint: String, val icon: androidx.c
 private val shortcuts = listOf(
     Shortcut("Bulk download", "Many links at once", QtIcons.Checklist, 0xFFFF8A3D) { it.openBulk() },
     Shortcut("Subscriptions", "Channels you follow and their new videos", QtIcons.Subscriptions, 0xFFFF0033) { it.openSubscriptions() },
-    Shortcut("Video playlists", "Made on this phone", QtIcons.PlaylistPlay, 0xFF4C8DFF) { it.openPlaylists(false) },
+    Shortcut("Video playlists", if (isMobilePlatform) "Made on this phone" else "Made in QuickTube", QtIcons.PlaylistPlay, 0xFF4C8DFF) { it.openPlaylists(false) },
     Shortcut("Music playlists", "Songs you saved", QtIcons.LibraryMusic, 0xFFB65CFF) { it.openPlaylists(true) },
     Shortcut("Watch history", "Pick up where you left off", QtIcons.History, 0xFF9B6BFF) { it.openWatchHistory() },
-    Shortcut("Browse sites", "Videos are detected automatically", QtIcons.Public, 0xFF2FCB7A) { it.openSites() },
+    Shortcut("Browse sites", if (isMobilePlatform) "Videos are detected automatically" else "Open a site, copy a video's link, paste it here", QtIcons.Public, 0xFF2FCB7A) { it.openSites() },
 )
 
 @Composable
 internal fun MoreTab(actions: HomeActions) {
-    LazyColumn(contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp + LocalBottomBarHeight.current), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    LazyColumn(Modifier.readableWidth(), contentPadding = PaddingValues(start = 16.dp, top = 16.dp, end = 16.dp, bottom = 16.dp + LocalBottomBarHeight.current), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Text("Your tools", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(4.dp, 4.dp, 4.dp, 6.dp))
         }
@@ -69,10 +71,11 @@ internal fun MoreTab(actions: HomeActions) {
                 if (pair.size == 1) Box(Modifier.weight(1f))
             }
         }
-        item {
+        // How to share from the YouTube, TikTok and WhatsApp apps: phone instructions.
+        if (isMobilePlatform) item {
             Text("Download from your favourite apps", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(4.dp, 16.dp, 4.dp, 6.dp))
         }
-        items(morePlatforms) { p ->
+        if (isMobilePlatform) items(morePlatforms) { p ->
             Row(
                 Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp))
                     .background(MaterialTheme.colorScheme.surfaceContainerLow)

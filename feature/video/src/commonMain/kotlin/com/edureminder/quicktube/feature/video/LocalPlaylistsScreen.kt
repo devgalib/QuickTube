@@ -1,7 +1,8 @@
 package com.edureminder.quicktube.feature.video
 
-import android.content.Intent
-import android.widget.Toast
+import com.edureminder.quicktube.core.ui.readableWidth
+import com.edureminder.quicktube.core.ui.rememberToaster
+import com.edureminder.quicktube.core.ui.show
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,7 +35,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -90,11 +90,11 @@ class LocalPlaylistViewModel(private val id: Long, private val repo: LocalPlayli
 fun LocalPlaylistsScreen(music: Boolean, onBack: () -> Unit, onOpen: (Long) -> Unit) {
     val vm = koinViewModel<LocalPlaylistsViewModel>(key = "lp$music") { org.koin.core.parameter.parametersOf(music) }
     val lists by vm.playlists.collectAsStateWithLifecycle()
-    val context = LocalContext.current
+    val toast = rememberToaster()
     var creating by remember { mutableStateOf(false) }
     var importing by remember { mutableStateOf(false) }
-    Scaffold(topBar = { QtTopBar(if (music) "Music playlists" else "Video playlists", onBack, subtitle = "Saved on this phone") }) { pad ->
-        LazyColumn(Modifier.fillMaxSize().padding(pad), contentPadding = PaddingValues(bottom = 32.dp)) {
+    Scaffold(topBar = { QtTopBar(if (music) "Music playlists" else "Video playlists", onBack, subtitle = "Saved on ${com.edureminder.quicktube.core.ui.thisDevice}") }) { pad ->
+        LazyColumn(Modifier.fillMaxSize().padding(pad).readableWidth(900.dp), contentPadding = PaddingValues(bottom = 32.dp)) {
             item(key = "actions") {
                 Row(Modifier.padding(horizontal = 16.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     PillButton("New playlist", { creating = true }, Modifier.weight(1f), icon = QtIcons.Add)
@@ -116,7 +116,7 @@ fun LocalPlaylistsScreen(music: Boolean, onBack: () -> Unit, onOpen: (Long) -> U
         confirm = "Import", onDismiss = { importing = false },
     ) { link ->
         vm.import(link) { r ->
-            r.onSuccess(onOpen).onFailure { Toast.makeText(context, it.message ?: "Couldn't read that playlist", Toast.LENGTH_LONG).show() }
+            r.onSuccess(onOpen).onFailure { toast.show(it.message ?: "Couldn't read that playlist", true) }
         }
     }
 }
@@ -180,7 +180,7 @@ fun LocalPlaylistScreen(
     val vm = koinViewModel<LocalPlaylistViewModel>(key = "lpl$id") { org.koin.core.parameter.parametersOf(id) }
     val p by vm.playlist.collectAsStateWithLifecycle()
     val entries by vm.entries.collectAsStateWithLifecycle()
-    val context = LocalContext.current
+    val share = com.edureminder.quicktube.core.ui.rememberTextSharer()
     var renaming by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf(false) }
     val list = p
@@ -191,15 +191,14 @@ fun LocalPlaylistScreen(
                 if (list == null || items.isEmpty()) return@QtIconButton
                 // One link per line: shared to QuickTube it becomes a bulk download of the whole playlist.
                 val text = "${list.name}\n" + items.joinToString("\n") { it.url } + "\n\nShared with QuickTube"
-                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
-                    .putExtra(Intent.EXTRA_SUBJECT, list.name).putExtra(Intent.EXTRA_TEXT, text), "Share playlist"))
+                share(list.name, text)
             })
             QtIconButton(QtIcons.Edit, "Rename", { renaming = true })
             QtIconButton(QtIcons.Delete, "Delete playlist", { deleting = true })
         }
     }) { pad ->
         if (list == null) { Box(Modifier.fillMaxSize().padding(pad)); return@Scaffold }
-        LazyColumn(Modifier.fillMaxSize().padding(pad), contentPadding = PaddingValues(bottom = 32.dp)) {
+        LazyColumn(Modifier.fillMaxSize().padding(pad).readableWidth(900.dp), contentPadding = PaddingValues(bottom = 32.dp)) {
             item(key = "head") {
                 Column(Modifier.padding(horizontal = 16.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {

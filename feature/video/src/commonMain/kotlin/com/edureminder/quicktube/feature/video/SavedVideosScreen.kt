@@ -1,11 +1,12 @@
 package com.edureminder.quicktube.feature.video
 
-import android.widget.Toast
+import com.edureminder.quicktube.core.ui.readableWidth
+import com.edureminder.quicktube.core.ui.rememberToaster
+import com.edureminder.quicktube.core.ui.show
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.platform.LocalContext
 import com.edureminder.quicktube.core.designsystem.QtIconButton
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,20 +50,20 @@ fun SavedVideosScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
     val vm = koinViewModel<SavedVideosViewModel>()
     val saved by vm.saved.collectAsStateWithLifecycle()
     val sheet = koinInject<DownloadSheetController>()
-    val context = LocalContext.current
+    val toast = rememberToaster()
     val list = saved
     Column(Modifier.fillMaxSize()) {
         QtTopBar("Watch later", onBack, subtitle = list?.takeIf { it.isNotEmpty() }?.let { "${it.size} saved video${if (it.size == 1) "" else "s"}" })
         when {
             list == null -> {}
             list.isEmpty() -> EmptyBox("Nothing saved yet", "Tap Watch later on a video to keep it here for later", icon = QtIcons.BookmarkBorder)
-            else -> LazyColumn(Modifier.fillMaxSize()) {
+            else -> LazyColumn(Modifier.fillMaxSize().readableWidth(900.dp)) {
                 items(list, key = { it.url }) { v ->
                     Row(Modifier.animateItem(), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.weight(1f)) { MediaRow(v.asItem(), onClick = { onOpen(v.asItem()) }, onDownload = { sheet.open(v.asItem()) }) }
                         QtIconButton(QtIcons.Bookmark, "Remove from Watch later", {
                             vm.remove(v.url)
-                            Toast.makeText(context, "Removed from Watch later", Toast.LENGTH_SHORT).show()
+                            toast.show("Removed from Watch later")
                         }, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(end = 6.dp))
                     }
                 }

@@ -29,7 +29,9 @@ libVLC). yt-dlp is downloaded into the app's data folder on first use and kept u
 ```
 
 Each format has to be built on its own OS, so `.github/workflows/desktop.yml` builds them on GitHub's Linux and
-Windows machines (Actions → Desktop → Run workflow, or push a `desktop-v1.0.0` tag to attach them to a release).
+Windows machines (Actions → Desktop → Run workflow, or push a `desktop-v1.0.1` tag to attach them to a release named after
+the tag; see "release desktop" in [AGENTS.md](../AGENTS.md)). Desktop releases are never marked Latest, so the Android
+in-app updater keeps finding the APKs.
 Packaging uses JDK 21 (Gradle's toolchain), because the IDE's bundled runtime has no `jpackage`.
 
 Publishing: GitHub Releases (all formats), Flathub (every Linux distro), the AUR (`quicktube-bin` pointing at the

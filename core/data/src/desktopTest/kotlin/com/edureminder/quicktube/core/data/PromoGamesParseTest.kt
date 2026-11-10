@@ -14,7 +14,7 @@ class PromoGamesParseTest {
               {"id": "nameless", "name": "", "package": "com.example.n", "icon": "https://x/i"}
             ]}
         """.trimIndent()
-        val games = RemoteConfigGamesRepository.parse(raw)!!
+        val games = PromoGamesConfig.parse(raw)!!
         assertEquals(listOf("arrow"), games.map { it.id })
         assertEquals("https://play.google.com/store/apps/details?id=com.edureminder.arrow", games[0].storeUrl)
         assertEquals("Puzzle", games[0].genre)
@@ -22,7 +22,7 @@ class PromoGamesParseTest {
 
     @Test
     fun emptyOrBrokenValuesAreRejected() {
-        assertNull(RemoteConfigGamesRepository.parse(""))
-        assertNull(RemoteConfigGamesRepository.parse("not json"))
+        assertNull(PromoGamesConfig.parse(""))
+        assertNull(PromoGamesConfig.parse("not json"))
     }
 }

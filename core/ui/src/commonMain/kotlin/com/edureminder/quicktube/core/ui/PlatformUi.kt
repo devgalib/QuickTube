@@ -38,3 +38,10 @@ class PickedText(val name: String, val text: String?)
 /** Opens the system's file picker for a text file; [onPicked] gets it (nothing when the user cancels). */
 @Composable
 expect fun rememberTextFilePicker(onPicked: (PickedText) -> Unit): () -> Unit
+
+/** Shares text (a link, a playlist's links): Android's share sheet; on desktop it's copied to the clipboard. */
+@Composable
+expect fun rememberTextSharer(): (subject: String, text: String) -> Unit
+
+/** "this phone" or "this computer", for text about what's kept on the device. */
+val thisDevice: String get() = if (isMobilePlatform) "this phone" else "this computer"

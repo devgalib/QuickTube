@@ -64,3 +64,15 @@ actual fun rememberTextFilePicker(onPicked: (PickedText) -> Unit): () -> Unit {
     }
     return { launcher.launch(arrayOf("text/*")) }
 }
+
+@Composable
+actual fun rememberTextSharer(): (subject: String, text: String) -> Unit {
+    val context = LocalContext.current
+    return remember(context) {
+        { subject, text ->
+            val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+                .putExtra(android.content.Intent.EXTRA_SUBJECT, subject).putExtra(android.content.Intent.EXTRA_TEXT, text)
+            context.startActivity(android.content.Intent.createChooser(send, "Share"))
+        }
+    }
+}

@@ -1,5 +1,6 @@
 package com.edureminder.quicktube.feature.video
 
+import com.edureminder.quicktube.core.ui.readableWidth
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -80,7 +81,7 @@ fun WatchHistoryScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
             Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 12.dp, top = 4.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Keep watch history", style = MaterialTheme.typography.bodyLarge)
-                    Text("Saved only on this phone. Videos continue where you left off.", style = MaterialTheme.typography.bodySmall,
+                    Text("Saved only on ${com.edureminder.quicktube.core.ui.thisDevice}. Videos continue where you left off.", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Switch(enabled, vm::setEnabled)
@@ -89,7 +90,7 @@ fun WatchHistoryScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
             when {
                 list == null -> Unit
                 list.isEmpty() -> EmptyBox("No videos watched yet", "YouTube videos you watch here show up in this list", Modifier.fillMaxSize(), QtIcons.History)
-                else -> LazyColumn(Modifier.fillMaxSize()) {
+                else -> LazyColumn(Modifier.fillMaxSize().readableWidth(900.dp)) {
                     groupByDay(list).forEach { (day, items) ->
                         item(key = "h-$day") {
                             Text(day, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold,
@@ -101,7 +102,7 @@ fun WatchHistoryScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit) {
             }
         }
     }
-    if (confirm) ConfirmDialog("Clear watch history?", "Your YouTube history and saved positions are removed from this phone.", "Clear",
+    if (confirm) ConfirmDialog("Clear watch history?", "Your YouTube history and saved positions are removed from ${com.edureminder.quicktube.core.ui.thisDevice}.", "Clear",
         { vm.clear() }, { confirm = false })
 }
 

@@ -105,12 +105,12 @@ internal fun LazyListScope.channelHome(
     }
 }
 
-/** Shorts two to a row, tall pictures like the YouTube app's Shorts tab. */
-internal fun LazyListScope.shortsGrid(items: List<MediaItem>, onOpen: (MediaItem) -> Unit, onDownload: (MediaItem) -> Unit) {
-    items(items.chunked(2), key = { row -> row.first().url }) { row ->
+/** Shorts [columns] to a row (two on phones), tall pictures like the YouTube app's Shorts tab. */
+internal fun LazyListScope.shortsGrid(items: List<MediaItem>, columns: Int, onOpen: (MediaItem) -> Unit, onDownload: (MediaItem) -> Unit) {
+    items(items.chunked(columns), key = { row -> row.first().url }) { row ->
         Row(Modifier.padding(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             row.forEach { item -> ShortCard(item, Modifier.weight(1f), { onOpen(item) }, { onDownload(item) }) }
-            if (row.size == 1) Box(Modifier.weight(1f))
+            repeat(columns - row.size) { Box(Modifier.weight(1f)) }
         }
     }
 }

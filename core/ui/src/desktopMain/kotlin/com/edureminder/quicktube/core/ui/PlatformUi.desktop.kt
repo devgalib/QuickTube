@@ -60,3 +60,11 @@ actual fun rememberTextFilePicker(onPicked: (PickedText) -> Unit): () -> Unit {
         }
     }
 }
+
+@Composable
+actual fun rememberTextSharer(): (subject: String, text: String) -> Unit = remember {
+    { _, text ->
+        java.awt.Toolkit.getDefaultToolkit().systemClipboard.setContents(java.awt.datatransfer.StringSelection(text), null)
+        DesktopToasts.messages.tryEmit("Copied — paste it anywhere to share" to false)
+    }
+}

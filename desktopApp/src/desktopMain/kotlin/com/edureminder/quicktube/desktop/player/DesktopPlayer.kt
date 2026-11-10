@@ -4,6 +4,12 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asComposeImageBitmap
 import com.edureminder.quicktube.core.common.QtLog
+import com.edureminder.quicktube.core.data.PlaybackHistoryRepository
+import com.edureminder.quicktube.core.data.SettingsRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -51,8 +57,19 @@ data class DesktopPlayback(
  * and plays a separate audio stream next to a video-only one. Frames are copied into a Skia bitmap that Compose draws,
  * so the app's own controls sit on top of the picture, the same as on Android.
  */
-class DesktopPlayer {
+class DesktopPlayer(
+    private val history: PlaybackHistoryRepository? = null,
+    private val settings: SettingsRepository? = null,
+) {
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val _state = MutableStateFlow(DesktopPlayback())
+
+    /** Called when the current item plays to its end (the music queue goes on to the next song). */
+    var onEnded: (() -> Unit)? = null
+
+    /** Where this item is remembered in the watch history ("web:<page>", "music:<page>", or a file path). */
+    @Volatile private var historyKey: String? = null
+    @Volatile private var lastSaved = 0L
     val state: StateFlow<DesktopPlayback> = _state
 
     /** Bumped for every new frame; [frame] is the picture to draw. */
@@ -77,16 +94,34 @@ class DesktopPlayer {
         }
     }
 
+    /**
+     * Plays [url] (with a separate [audioUrl] when the video stream has no sound). With a [historyKey] it's saved in the
+     * watch history as it plays and, when [startMs] is 0, continues where it was left (Settings → Player on Android).
+     */
     fun play(
         url: String, title: String, key: String, audioUrl: String? = null, isVideo: Boolean = true,
-        subtitle: String = "", artwork: String? = null, startMs: Long = 0, userAgent: String? = null,
+        subtitle: String = "", artwork: String? = null, startMs: Long = 0, userAgent: String? = null, historyKey: String? = null,
     ) {
         val p = player ?: run { _state.update { it.copy(error = "Install VLC to play videos in QuickTube") }; return }
+        saveProgress()
         frame = null
+        this.historyKey = historyKey
         _state.value = DesktopPlayback(
             title = title, subtitle = subtitle, artwork = artwork, key = key, isVideo = isVideo, buffering = true,
             volume = _state.value.volume, muted = _state.value.muted, speed = 1f,
         )
+        scope.launch {
+            val prefs = settings?.current()
+            val keep = historyKey != null && prefs?.playHistory != false
+            val resumeAt = if (startMs == 0L && keep && prefs?.resumePlayback != false) {
+                history?.all()?.firstOrNull { it.key == historyKey }?.takeIf { it.durationMs <= 0 || it.positionMs < it.durationMs - 5_000 }?.positionMs ?: 0
+            } else startMs
+            if (keep) history?.save(historyKey!!, title, resumeAt, 0, opened = true, thumbnail = artwork, uploader = subtitle)
+            start(p, url, audioUrl, isVideo, userAgent, resumeAt)
+        }
+    }
+
+    private fun start(p: EmbeddedMediaPlayer, url: String, audioUrl: String?, isVideo: Boolean, userAgent: String?, startMs: Long) {
         val options = buildList {
             audioUrl?.let { add(":input-slave=$it") }
             userAgent?.let { add(":http-user-agent=$it") }
@@ -133,23 +168,48 @@ class DesktopPlayer {
         _state.update { it.copy(speed = speed) }
     }
 
+    /** Saves where the current item is (watch history), at most every few seconds unless [now]. */
+    private fun saveProgress(now: Boolean = true) {
+        val key = historyKey ?: return
+        val s = _state.value
+        if (s.positionMs <= 0) return
+        val t = System.currentTimeMillis()
+        if (!now && t - lastSaved < 5_000) return
+        lastSaved = t
+        scope.launch {
+            if (settings?.current()?.playHistory == false) return@launch
+            history?.save(key, s.title, s.positionMs, s.durationMs, thumbnail = s.artwork, uploader = s.subtitle)
+        }
+    }
+
     fun stop() {
+        saveProgress()
+        historyKey = null
         player?.controls()?.stop()
         frame = null
         _state.update { DesktopPlayback(volume = it.volume, muted = it.muted) }
     }
 
     fun release() {
+        // The window is closing: write where the video was left before the process ends.
+        historyKey?.let { key ->
+            val s = _state.value
+            if (s.positionMs > 0) runCatching { kotlinx.coroutines.runBlocking { history?.save(key, s.title, s.positionMs, s.durationMs) } }
+        }
         runCatching { player?.release(); factory?.release() }
     }
 
     private inner class Events : MediaPlayerEventAdapter() {
         override fun playing(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = true, buffering = false, ended = false, error = null) }
-        override fun paused(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false) }
+        override fun paused(mediaPlayer: MediaPlayer) { _state.update { it.copy(playing = false) }; saveProgress() }
         override fun stopped(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false) }
-        override fun finished(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false, ended = true, positionMs = it.durationMs) }
+        override fun finished(mediaPlayer: MediaPlayer) {
+            _state.update { it.copy(playing = false, ended = true, positionMs = it.durationMs) }
+            saveProgress()
+            onEnded?.let { cb -> java.awt.EventQueue.invokeLater { cb() } }
+        }
         override fun buffering(mediaPlayer: MediaPlayer, newCache: Float) = _state.update { it.copy(buffering = newCache < 100f) }
-        override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) = _state.update { it.copy(positionMs = newTime) }
+        override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) { _state.update { it.copy(positionMs = newTime) }; saveProgress(now = false) }
         override fun lengthChanged(mediaPlayer: MediaPlayer, newLength: Long) = _state.update { it.copy(durationMs = newLength) }
         override fun error(mediaPlayer: MediaPlayer) = _state.update { it.copy(playing = false, buffering = false, error = "Couldn't play this video") }
     }

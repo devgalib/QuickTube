@@ -31,5 +31,5 @@ internal actual val platformDataModule: org.koin.core.module.Module = module {
             override suspend fun mediaIdFor(path: String): Long? = null
         }
     }
-    single<GamesRepository> { NoGamesRepository() }
+    single<GamesRepository> { DesktopGamesRepository(get()) }
 }

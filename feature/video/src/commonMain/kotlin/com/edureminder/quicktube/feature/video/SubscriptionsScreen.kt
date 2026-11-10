@@ -1,5 +1,6 @@
 package com.edureminder.quicktube.feature.video
 
+import com.edureminder.quicktube.core.ui.readableWidth
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -95,14 +96,14 @@ fun SubscriptionsScreen(onBack: () -> Unit, onOpen: (MediaItem) -> Unit, onChann
     LaunchedEffect(channels?.size) { if (channels != null) vm.load(refresh = ui.items != null) }
     Scaffold(topBar = {
         Column {
-            QtTopBar("Subscriptions", onBack, subtitle = channels?.let { "${it.size} channels · saved on this phone" })
+            QtTopBar("Subscriptions", onBack, subtitle = channels?.let { "${it.size} channels · saved on ${com.edureminder.quicktube.core.ui.thisDevice}" })
             if (!channels.isNullOrEmpty()) Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 QtChip("Videos", !showChannels, { showChannels = false })
                 QtChip("Channels", showChannels, { showChannels = true })
             }
         }
     }) { pad ->
-        val mod = Modifier.fillMaxSize().padding(pad)
+        val mod = Modifier.fillMaxSize().padding(pad).readableWidth(1000.dp)
         val list = channels
         when {
             list == null -> LoadingBox(mod)

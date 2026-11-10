@@ -5,10 +5,19 @@ These rules apply to AI coding agents (Claude Code, Copilot, etc.) and humans wo
 ## Git
 
 - **"push" / "push code" / "push to GitHub"** → commit the work and push to **`main`** (the default branch).
-- **"push to production" / "release"** → make sure `main` is pushed and green, then publish it with
-  `git push origin main:production`. This triggers `.github/workflows/release.yml`, which builds a signed APK and creates a
-  GitHub Release (see [docs/RELEASING.md](docs/RELEASING.md)).
-- Only touch `production` when the maintainer explicitly asks for a production push or a release. Never force-push it.
+- Android and desktop are released separately; do only the one that was asked for.
+  - **"release android" / "push to production"** → make sure `main` is pushed and green, then publish it with
+    `git push origin main:production`. This triggers `.github/workflows/release.yml`, which builds the signed APKs and
+    creates the `vX.Y.Z` GitHub Release marked Latest, which the Android in-app updater reads (see
+    [docs/RELEASING.md](docs/RELEASING.md)).
+  - **"release desktop"** → make sure `main` is pushed and green, then tag it `desktop-v<appVersionBase>.<n>` (`n` is one
+    more than the newest `desktop-v*` tag, starting at 1) and push only that tag: `git tag desktop-v1.0.1 main &&
+    git push origin desktop-v1.0.1`. This triggers `.github/workflows/desktop.yml`, which builds the Linux and Windows
+    installers and attaches them to that tag's GitHub Release. It's never marked Latest, so the Android updater ignores it.
+    Don't touch `production` for it.
+  - **"release" alone** → ask whether Android, desktop or both. **"release both"** → Android first, then desktop.
+- Only touch `production` (Android) or push a `desktop-v*` tag when the maintainer explicitly asks for that release.
+  Never force-push `production`, and never move or delete a pushed release tag.
 - Contributors (anyone but the maintainer) work on a branch in their fork and open a pull request to `main`.
 - Commit messages: short imperative subject, details in the body.
 

@@ -39,6 +39,7 @@ import com.edureminder.quicktube.core.ytdlp.ytDlpModule
 import com.edureminder.quicktube.desktop.player.DesktopPlayer
 import com.edureminder.quicktube.feature.home.homeModule
 import com.edureminder.quicktube.feature.search.searchModule
+import com.edureminder.quicktube.feature.video.videoListsModule
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -63,7 +64,7 @@ fun main() {
     System.setProperty("awt.useSystemAAFontSettings", "on")
     System.setProperty("skiko.renderApi", System.getProperty("skiko.renderApi") ?: "OPENGL")
     startKoin {
-        modules(analyticsModule, dataModule, downloadModule, downloadSheetModule, ytDlpModule, homeModule, searchModule, desktopModule)
+        modules(analyticsModule, dataModule, downloadModule, downloadSheetModule, ytDlpModule, homeModule, searchModule, videoListsModule, desktopModule)
     }
     startBackgroundWork()
     // QT_SNAPSHOT=<file.png>: render the app off-screen at QT_SIZE for QT_SNAPSHOT_SECONDS and save a picture

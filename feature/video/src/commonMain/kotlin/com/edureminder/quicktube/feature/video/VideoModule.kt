@@ -3,8 +3,8 @@ package com.edureminder.quicktube.feature.video
 import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 
-val videoModule = module {
-    viewModel { VideoViewModel(get(), get(), get(), get(), get()) }
+/** The video feature's screens shared by Android and desktop: channels, playlists, subscriptions, history, saved. */
+val videoListsModule = module {
     viewModel { ListPageViewModel(get()) }
     viewModel { SavedVideosViewModel(get()) }
     viewModel { WatchHistoryViewModel(get(), get()) }

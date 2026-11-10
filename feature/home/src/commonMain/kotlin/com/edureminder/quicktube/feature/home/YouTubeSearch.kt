@@ -186,6 +186,8 @@ internal fun YouTubeTab(
     var focused by remember { mutableStateOf(false) }
     val focus = LocalFocusManager.current
     val submit = { q: String -> vm.search(q); focus.clearFocus() }
+    val asked by com.edureminder.quicktube.core.navigation.HomeTabs.search.collectAsStateWithLifecycle()
+    LaunchedEffect(asked) { asked?.let { (q, f) -> if (f != null) vm.search(q, f) else vm.search(q); com.edureminder.quicktube.core.navigation.HomeTabs.searchConsumed() } }
     // Back leaves the search: first the field, then the results.
     com.edureminder.quicktube.core.ui.QtBackHandler(focused || ui.query != null) {
         if (focused) focus.clearFocus() else vm.clear()
@@ -326,20 +328,23 @@ private fun Results(
                     snapshotFlow { grid.layoutInfo.let { it.visibleItemsInfo.lastOrNull()?.index ?: 0 >= it.totalItemsCount - 6 } }
                         .distinctUntilChanged().collect { if (it) onMore() }
                 }
+                // Two Shorts side by side on phones; more columns as the window widens (each stays ~170–240dp wide).
                 LazyVerticalGrid(
-                    GridCells.Fixed(2), state = grid,
+                    GridCells.Adaptive(170.dp), state = grid,
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = top + 6.dp, bottom = bottom),
                     horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     items(ui.items, key = { it.url }) { ShortTile(it, onClick = { actions.openItem(it) }, onDownload = { onDownload(it) }) }
-                    if (ui.loadingMore) item(span = { GridItemSpan(2) }) { FooterLoading() }
+                    if (ui.loadingMore) item(span = { GridItemSpan(maxLineSpan) }) { FooterLoading() }
                 }
             }
             else -> {
-                val state = rememberLazyListState()
+                val state = rememberLazyGridState()
                 state.OnNearEnd { onMore() }
-                LazyColumn(state = state, contentPadding = PaddingValues(top = top + 6.dp, bottom = bottom)) {
-                    items(ui.items, key = { it.url }) { item ->
+                // One full-width card per row on phones; on tablets and desktop windows as many ~340dp cards as fit,
+                // so a picture is never taller than the window. Channels and playlists keep a full-width row.
+                LazyVerticalGrid(GridCells.Adaptive(340.dp), state = state, contentPadding = PaddingValues(top = top + 6.dp, bottom = bottom)) {
+                    items(ui.items, key = { it.url }, span = { if (it.kind == ItemKind.VIDEO) GridItemSpan(1) else GridItemSpan(maxLineSpan) }) { item ->
                         Box(Modifier.animateItem()) {
                             if (item.kind == ItemKind.VIDEO) VideoFeedCard(
                                 item, onClick = { actions.openItem(item) }, onDownload = { onDownload(item) },
@@ -347,7 +352,7 @@ private fun Results(
                             ) else MediaRow(item, onClick = { actions.openItem(item) })
                         }
                     }
-                    if (ui.loadingMore) item { FooterLoading() }
+                    if (ui.loadingMore) item(span = { GridItemSpan(maxLineSpan) }) { FooterLoading() }
                 }
             }
         }

@@ -103,12 +103,17 @@ fun GamesScreen(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize()) {
         QtTopBar(section.title, onBack, subtitle = "Made by the QuickTube team")
         if (section.games.isEmpty()) EmptyBox("No games yet", "New games show up here", icon = QtIcons.Apps)
-        else LazyColumn(
+        // One card per row on phones, a grid of ~360dp cards on tablets and desktop windows.
+        else androidx.compose.foundation.lazy.grid.LazyVerticalGrid(
+            androidx.compose.foundation.lazy.grid.GridCells.Adaptive(360.dp),
             Modifier.fillMaxSize().navigationBarsPadding(),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp), horizontalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            items(section.games, key = { it.id }) { g -> GameCard(g, Modifier.animateItem()) { openGame(g) } }
+            items(section.games.size, key = { section.games[it].id }) { i ->
+                val g = section.games[i]
+                GameCard(g, Modifier.animateItem()) { openGame(g) }
+            }
         }
     }
 }

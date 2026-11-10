@@ -91,7 +91,7 @@ fun DownloadsScreen(onPlay: () -> Unit, onOpenSource: (String) -> Unit, onBack: 
 
     fun play(t: DownloadTask) {
         if (!File(t.filePath).exists()) { toast.show("The file was moved or deleted"); return }
-        player.play(t.filePath, t.title, key = t.filePath, isVideo = t.type == ContentType.VIDEO, artwork = t.thumbnail, startMs = t.lastPlayedPositionMs)
+        player.play(t.filePath, t.title, key = t.filePath, isVideo = t.type == ContentType.VIDEO, artwork = t.thumbnail, historyKey = t.filePath)
         onPlay()
     }
 

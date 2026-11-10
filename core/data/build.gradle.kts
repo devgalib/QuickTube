@@ -19,6 +19,9 @@ kotlin {
         implementation(project.dependencies.platform(libs.firebase.bom))
         implementation(libs.firebase.config)
     }
+    sourceSets.desktopMain.dependencies {
+        implementation(libs.okhttp)
+    }
     sourceSets.getByName("androidHostTest").dependencies {
         implementation(libs.junit)
     }

@@ -83,17 +83,25 @@ fun FooterLoading() {
 @Composable
 private fun Bone(modifier: Modifier, corner: Int = 8) = Box(modifier.clip(RoundedCornerShape(corner.dp)).shimmer())
 
+/** Placeholder video cards, laid out like the feed grid (one per row on phones, more columns on wide windows). */
 @Composable
 fun FeedSkeleton(count: Int = 3) {
-    Column(Modifier.fillMaxSize()) {
-        repeat(count) {
-            Column(Modifier.padding(bottom = 18.dp)) {
-                Bone(Modifier.padding(horizontal = 16.dp).fillMaxWidth().aspectRatio(16f / 9f), 20)
-                Row(Modifier.padding(16.dp, 12.dp)) {
-                    Bone(Modifier.size(38.dp), 19)
-                    Column(Modifier.padding(start = 12.dp).weight(1f)) {
-                        Bone(Modifier.fillMaxWidth(0.9f).height(14.dp))
-                        Bone(Modifier.padding(top = 8.dp).fillMaxWidth(0.55f).height(12.dp))
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+        val columns = (maxWidth / 340.dp).toInt().coerceAtLeast(1)
+        Column(Modifier.fillMaxSize()) {
+            repeat(count) {
+                Row {
+                    repeat(columns) {
+                        Column(Modifier.weight(1f).padding(bottom = 18.dp)) {
+                            Bone(Modifier.padding(horizontal = 16.dp).fillMaxWidth().aspectRatio(16f / 9f), 20)
+                            Row(Modifier.padding(16.dp, 12.dp)) {
+                                Bone(Modifier.size(38.dp), 19)
+                                Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                                    Bone(Modifier.fillMaxWidth(0.9f).height(14.dp))
+                                    Bone(Modifier.padding(top = 8.dp).fillMaxWidth(0.55f).height(12.dp))
+                                }
+                            }
+                        }
                     }
                 }
             }

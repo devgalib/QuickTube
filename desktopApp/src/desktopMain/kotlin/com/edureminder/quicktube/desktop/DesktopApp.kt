@@ -82,8 +82,22 @@ import com.edureminder.quicktube.core.ui.isWide
 import com.edureminder.quicktube.core.designsystem.QtIconButton
 import com.edureminder.quicktube.desktop.player.DesktopPlayer
 import com.edureminder.quicktube.desktop.player.LineProgress
-import com.edureminder.quicktube.desktop.screens.DesktopListPage
 import com.edureminder.quicktube.desktop.screens.DesktopPlayerScreen
+import com.edureminder.quicktube.desktop.screens.SitesPage
+import com.edureminder.quicktube.desktop.player.DesktopMusic
+import com.edureminder.quicktube.feature.video.ListPageScreen
+import com.edureminder.quicktube.feature.video.LocalPlaylistScreen
+import com.edureminder.quicktube.feature.video.LocalPlaylistsScreen
+import com.edureminder.quicktube.feature.video.SavedVideosScreen
+import com.edureminder.quicktube.feature.video.SubscriptionsScreen
+import com.edureminder.quicktube.feature.video.WatchHistoryScreen
+import com.edureminder.quicktube.core.navigation.LocalPlaylistRoute
+import com.edureminder.quicktube.core.navigation.LocalPlaylistsRoute
+import com.edureminder.quicktube.core.navigation.SavedVideosRoute
+import com.edureminder.quicktube.core.navigation.SitesRoute
+import com.edureminder.quicktube.core.navigation.SubscriptionsRoute
+import com.edureminder.quicktube.core.navigation.VideoQueue
+import com.edureminder.quicktube.core.navigation.WatchHistoryRoute
 import com.edureminder.quicktube.desktop.screens.DesktopSettingsScreen
 import com.edureminder.quicktube.desktop.screens.DownloadsScreen
 import com.edureminder.quicktube.desktop.screens.VideoPage
@@ -158,7 +172,14 @@ fun DesktopApp(shell: ShellState) {
                 }
                 start == "settings" -> nav.navigate(SettingsRoute)
                 start == "youtube" -> HomeTabs.show(HomeTabs.YOUTUBE)
+                start.startsWith("ytsearch:") -> HomeTabs.searchYouTube(start.removePrefix("ytsearch:"))
+                start.startsWith("ytshorts:") -> HomeTabs.searchYouTube(start.removePrefix("ytshorts:"), com.edureminder.quicktube.core.model.SearchFilter.SHORTS)
                 start == "music" -> HomeTabs.show(2)
+                start == "more" -> HomeTabs.show(3)
+                start == "history" -> nav.navigate(WatchHistoryRoute)
+                start == "subscriptions" -> nav.navigate(SubscriptionsRoute)
+                start == "music-playlists" -> nav.navigate(LocalPlaylistsRoute(true))
+                start == "sites" -> nav.navigate(SitesRoute)
             }
         } }
         BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
@@ -176,6 +197,8 @@ private fun Shell(nav: NavHostController, widthClass: WidthClass) {
     val sheet = koinInject<DownloadSheetController>()
     val player = koinInject<DesktopPlayer>()
     val uri = androidx.compose.ui.platform.LocalUriHandler.current
+    val toast = com.edureminder.quicktube.core.ui.rememberToaster()
+    val music = koinInject<DesktopMusic>()
     val backStack by nav.currentBackStackEntryAsState()
     val dest = backStack?.destination
     val selected = tabs.indexOfFirst { (route, _) -> dest?.hierarchy?.any { it.hasRoute(route::class) } == true }
@@ -193,6 +216,11 @@ private fun Shell(nav: NavHostController, widthClass: WidthClass) {
         restoreState = true
     }
 
+    fun openInBrowser(url: String) {
+        runCatching { uri.openUri(url) }
+        toast.show("Opened in your browser. Copy a video's link there and paste it here", true)
+    }
+
     // Links: YouTube & co. open in the app; any other site's link goes straight to the download sheet (the phone
     // app's in-app browser is a desktop's own web browser).
     fun openUrl(raw: String) {
@@ -204,7 +232,9 @@ private fun Shell(nav: NavHostController, widthClass: WidthClass) {
             ItemKind.VIDEO -> nav.navigate(VideoRoute(url))
             ItemKind.PLAYLIST -> nav.navigate(PlaylistRoute(url))
             ItemKind.CHANNEL -> nav.navigate(ChannelRoute(url))
-            null -> sheet.open(url)
+            // One video or post (or a media file): straight to the download sheet. A site's home page or feed has no
+            // single video, so it opens in the web browser, where the user copies the video's link.
+            null -> if (Urls.namesOneMedia(url) || Urls.isMediaFile(url)) sheet.open(url) else openInBrowser(url)
         }
     }
     fun downloadUrl(raw: String) {
@@ -219,7 +249,6 @@ private fun Shell(nav: NavHostController, widthClass: WidthClass) {
             ItemKind.PLAYLIST -> PlaylistRoute(item.url)
         },
     )
-    val toast = com.edureminder.quicktube.core.ui.rememberToaster()
 
     val content: @Composable (Modifier) -> Unit = { modifier ->
         NavHost(
@@ -240,10 +269,14 @@ private fun Shell(nav: NavHostController, widthClass: WidthClass) {
                                 ?.let { runCatching { uri.openUri(it) } }
                             toast.show("Copy a video's link in your browser, then paste it here", true)
                         },
-                        openSites = { toast.show("Open any site in your web browser, copy the video's link and paste it here", true) },
+                        openSites = { nav.navigate(SitesRoute) },
                         openLibrary = { selectTab(1) },
                         openBulk = { nav.navigate(BulkRoute()) },
-                        playMusic = { songs, i -> openItem(songs[i]) },
+                        playMusic = { songs, i -> music.play(songs, i); nav.navigate(PlayerRoute) { launchSingleTop = true } },
+                        openWatchHistory = { nav.navigate(WatchHistoryRoute) },
+                        openSubscriptions = { nav.navigate(SubscriptionsRoute) },
+                        openPlaylists = { isMusic -> nav.navigate(LocalPlaylistsRoute(isMusic)) },
+                        openLocalPlaylist = { id -> nav.navigate(LocalPlaylistRoute(id)) },
                     ),
                 )
             }
@@ -253,7 +286,7 @@ private fun Shell(nav: NavHostController, widthClass: WidthClass) {
                     onBack = { nav.popBackStack() },
                     onSearch = { q -> nav.navigate(SearchResultsRoute(q)) { popUpTo<SearchRoute> { inclusive = true } } },
                     onOpenUrl = ::openUrl,
-                    onViewSites = { toast.show("Open any site in your web browser, copy the video's link and paste it here", true) },
+                    onViewSites = { nav.navigate(SitesRoute) },
                     onDownloadUrl = ::downloadUrl,
                 )
             }
@@ -265,8 +298,37 @@ private fun Shell(nav: NavHostController, widthClass: WidthClass) {
                 val r = e.toRoute<VideoRoute>()
                 VideoPage(r.url, r.title, r.thumbnail, onBack = { nav.popBackStack() }, onOpen = ::openItem, onChannel = { nav.navigate(ChannelRoute(it)) })
             }
-            composable<ChannelRoute> { e -> DesktopListPage(e.toRoute<ChannelRoute>().url, isChannel = true, onBack = { nav.popBackStack() }, onOpen = ::openItem) }
-            composable<PlaylistRoute> { e -> DesktopListPage(e.toRoute<PlaylistRoute>().url, isChannel = false, onBack = { nav.popBackStack() }, onOpen = ::openItem) }
+            composable<ChannelRoute> { e -> ListPageScreen(e.toRoute<ChannelRoute>().url, true, { nav.popBackStack() }, ::openItem) }
+            composable<PlaylistRoute> { e -> ListPageScreen(e.toRoute<PlaylistRoute>().url, false, { nav.popBackStack() }, ::openItem) }
+            composable<SubscriptionsRoute> { SubscriptionsScreen({ nav.popBackStack() }, onOpen = ::openItem, onChannel = { nav.navigate(ChannelRoute(it)) }) }
+            composable<SavedVideosRoute> { SavedVideosScreen({ nav.popBackStack() }, onOpen = ::openItem) }
+            composable<WatchHistoryRoute> { WatchHistoryScreen({ nav.popBackStack() }, onOpen = ::openItem) }
+            composable<LocalPlaylistsRoute> { e ->
+                LocalPlaylistsScreen(e.toRoute<LocalPlaylistsRoute>().music, { nav.popBackStack() }, onOpen = { id -> nav.navigate(LocalPlaylistRoute(id)) })
+            }
+            composable<LocalPlaylistRoute> { e ->
+                LocalPlaylistScreen(
+                    e.toRoute<LocalPlaylistRoute>().id, { nav.popBackStack() },
+                    onPlay = { list, items, index ->
+                        if (list.isMusic) {
+                            music.play(items, index)
+                            nav.navigate(PlayerRoute) { launchSingleTop = true }
+                        } else {
+                            // The video page plays the rest of the playlist one after another.
+                            VideoQueue.start(list.name, items)
+                            val v = items[index]
+                            nav.navigate(VideoRoute(v.url, v.title.ifBlank { null }, v.thumbnail))
+                        }
+                    },
+                    onDownloadAll = { name, links -> nav.navigate(BulkRoute(links.joinToString("\n"), name)) },
+                )
+            }
+            composable<SitesRoute> {
+                SitesPage({ nav.popBackStack() }) { site ->
+                    if (site.url == com.edureminder.quicktube.core.model.BUILT_IN_YOUTUBE_URL) { HomeTabs.show(HomeTabs.YOUTUBE); selectTab(0) }
+                    else openInBrowser(site.url)
+                }
+            }
             composable<LibraryRoute>(enterTransition = QtTransitions.tabEnter, exitTransition = QtTransitions.tabExit) {
                 DownloadsScreen(onPlay = { nav.navigate(PlayerRoute) }, onOpenSource = ::openUrl)
             }

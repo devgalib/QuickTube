@@ -2,7 +2,6 @@ package com.edureminder.quicktube.core.data
 
 import android.content.Context
 import android.util.Log
-import com.edureminder.quicktube.core.model.PromoGame
 import com.edureminder.quicktube.core.model.PromoGames
 import com.google.firebase.FirebaseApp
 import com.google.firebase.remoteconfig.FirebaseRemoteConfig
@@ -15,9 +14,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.serialization.SerialName
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import kotlin.coroutines.resume
 
 /**
@@ -91,22 +87,6 @@ internal class RemoteConfigGamesRepository(context: Context) : GamesRepository {
         }
     }
 
-    @Serializable
-    private data class GamesDoc(val games: List<GameDto> = emptyList())
-
-    @Serializable
-    private data class GameDto(
-        val id: String,
-        val name: String,
-        @SerialName("package") val packageName: String,
-        val icon: String,
-        val banner: String? = null,
-        val tagline: String = "",
-        val genre: String = "",
-        val url: String? = null,
-        val enabled: Boolean = true,
-    )
-
     companion object {
         private const val TAG = "PromoGames"
         const val KEY_GAMES = "qt_games"
@@ -123,28 +103,7 @@ internal class RemoteConfigGamesRepository(context: Context) : GamesRepository {
         private const val FETCHED_AT = "fetched_at"
         private const val VISITS = "visits"
 
-        private val json = Json { ignoreUnknownKeys = true; isLenient = true }
-
-        /** Null when [raw] isn't a games document; otherwise its enabled, complete entries. */
-        internal fun parse(raw: String): List<PromoGame>? = runCatching {
-            if (raw.isBlank()) return null
-            json.decodeFromString<GamesDoc>(raw).games.filter { it.enabled && it.name.isNotBlank() && it.packageName.isNotBlank() }.map { g ->
-                PromoGame(
-                    id = g.id, name = g.name, packageName = g.packageName, iconUrl = g.icon, bannerUrl = g.banner?.ifBlank { null },
-                    tagline = g.tagline, genre = g.genre,
-                    storeUrl = g.url?.ifBlank { null } ?: "https://play.google.com/store/apps/details?id=${g.packageName}",
-                )
-            }
-        }.getOrNull()
-
-        /** Shown before the first successful fetch (and in builds without Firebase). */
-        internal val BUILT_IN = listOf(
-            PromoGame(
-                id = "arrow", name = "Arrow Puzzle: Puzzle Escape", packageName = "com.edureminder.arrow",
-                iconUrl = "https://play-lh.googleusercontent.com/92-fPbbSm080ASr0slQYAkRzoZJe49BHbKsWGAWW-HaWOEK433FVlZjXNywcfg_xuUnMBZQVWsdu6VG2xlKs=s256-rw",
-                bannerUrl = "https://play-lh.googleusercontent.com/wuVcRpj6ZwqsUQ-KARBPLQJ4I25kYYZua2-cYE4E1n2c7vCmNS1CPrXJUpHhnyf2FTkjKK2UJEvV51aW2QuJmZQ=w1052-h592-rw",
-                tagline = "Tap arrows to clear the maze!", genre = "Puzzle",
-            ),
-        )
+        internal fun parse(raw: String) = PromoGamesConfig.parse(raw)
+        internal val BUILT_IN get() = PromoGamesConfig.BUILT_IN
     }
 }

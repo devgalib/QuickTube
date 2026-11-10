@@ -38,6 +38,7 @@ kotlin {
                 implementation(projects.core.analytics)
                 implementation(projects.feature.home)
                 implementation(projects.feature.search)
+                implementation(projects.feature.video)
 
                 implementation(compose.desktop.currentOs)
                 implementation(compose.runtime)
@@ -64,6 +65,38 @@ kotlin {
         }
     }
 }
+
+/**
+ * The Firebase project's client settings for the desktop app ("Our games" comes from the same Remote Config as on
+ * Android), taken from app/google-services.json when it's there. That file is never committed; without it the
+ * build still works and the app shows its built-in games list.
+ */
+abstract class FirebaseDesktopConfig : DefaultTask() {
+    @get:InputFiles @get:Optional abstract val googleServices: ConfigurableFileCollection
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun generate() {
+        val dir = outputDir.get().asFile.apply { deleteRecursively(); mkdirs() }
+        val file = googleServices.files.firstOrNull { it.isFile } ?: return
+        @Suppress("UNCHECKED_CAST")
+        val json = groovy.json.JsonSlurper().parse(file) as Map<String, Any?>
+        val project = json["project_info"] as Map<String, Any?>
+        val clients = json["client"] as List<Map<String, Any?>>
+        val client = clients.firstOrNull {
+            ((it["client_info"] as Map<String, Any?>)["android_client_info"] as Map<String, Any?>)["package_name"] == "com.edureminder.quicktube"
+        } ?: clients.first()
+        val appId = (client["client_info"] as Map<String, Any?>)["mobilesdk_app_id"]
+        val apiKey = ((client["api_key"] as List<Map<String, Any?>>).first())["current_key"]
+        dir.resolve("firebase.properties").writeText("projectNumber=${project["project_number"]}\nappId=$appId\napiKey=$apiKey\n")
+    }
+}
+
+val firebaseDesktopConfig by tasks.registering(FirebaseDesktopConfig::class) {
+    googleServices.from(rootProject.layout.projectDirectory.file("app/google-services.json").asFile.takeIf { it.isFile } ?: emptyList<File>())
+    outputDir = layout.buildDirectory.dir("generated/firebase")
+}
+kotlin.sourceSets.getByName("desktopMain").resources.srcDir(firebaseDesktopConfig.map { it.outputDir })
 
 val appVersion = (findProperty("appVersionName") as String?)?.substringBefore("-") ?: "${property("appVersionBase")}.0"
 

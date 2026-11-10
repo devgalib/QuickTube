@@ -16,11 +16,5 @@ interface OneTimeFlags {
     fun set(name: String)
 }
 
-/** Our games for the home screen where there are none to show (desktop: they're Android games). */
-internal class NoGamesRepository : GamesRepository {
-    override val games = kotlinx.coroutines.flow.MutableStateFlow(com.edureminder.quicktube.core.model.PromoGames(games = emptyList()))
-    override fun refreshIfDue() = Unit
-}
-
 /** Bindings each platform makes itself: the library (folders, media index), browser flags, gallery and games. */
 internal expect val platformDataModule: org.koin.core.module.Module

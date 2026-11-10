@@ -111,10 +111,19 @@ fun VideoPage(url: String, previewTitle: String?, previewThumbnail: String?, onB
         if (streamUrl == null) return
         player.play(
             url = streamUrl, audioUrl = o?.audioUrl, title = d.item.title, subtitle = d.item.uploader,
-            artwork = d.item.thumbnail ?: previewThumbnail, key = url, startMs = start,
+            artwork = d.item.thumbnail ?: previewThumbnail, key = url, startMs = start, historyKey = "web:$url",
         )
         quality = o?.height
     }
+
+    // A video playlist being played (Play all on a playlist): the next one opens when this one ends.
+    val playback by player.state.collectAsState()
+    LaunchedEffect(playback.ended, playback.key) {
+        if (playback.ended && playback.key == url) com.edureminder.quicktube.core.navigation.VideoQueue.nextAfter(url)?.let(onOpen)
+    }
+    // The picture's own shape (Shorts are tall); 16:9 until the video says.
+    val ratio = if (playback.key == url && playback.videoWidth > 0 && playback.videoHeight > 0) playback.videoWidth.toFloat() / playback.videoHeight
+    else if ("/shorts/" in url) 9f / 16f else 16f / 9f
 
     val ready = state as? LoadState.Success
     LaunchedEffect(ready) {
@@ -140,7 +149,7 @@ fun VideoPage(url: String, previewTitle: String?, previewThumbnail: String?, onB
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val twoPane = maxWidth >= 980.dp
             val upNextWidth = (maxWidth * 0.32f).coerceIn(320.dp, 440.dp)
-            val playerMaxHeight = maxHeight * 0.62f
+            val playerMaxHeight = maxHeight * if (twoPane) 0.74f else 0.62f
             when (val s = state) {
                 is LoadState.Error -> ErrorBox(s.message, onRetry = { vm.load(true) })
                 else -> {
@@ -148,7 +157,12 @@ fun VideoPage(url: String, previewTitle: String?, previewThumbnail: String?, onB
                     if (twoPane) {
                         Row(Modifier.fillMaxSize().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                             LazyColumn(Modifier.weight(1f).fillMaxHeight()) {
-                                item { playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f).clip(RoundedCornerShape(16.dp))) }
+                                item {
+                                    // Wide videos fill the column; tall ones (Shorts) take the height and sit in the middle.
+                                    Box(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(androidx.compose.ui.graphics.Color.Black), contentAlignment = Alignment.Center) {
+                                        playerBox(Modifier.heightIn(max = playerMaxHeight).aspectRatio(ratio, matchHeightConstraintsFirst = true))
+                                    }
+                                }
                                 item { Details(d, url, previewTitle, quality, onChannel) { h -> d?.let { startPlayback(it, h, keepPosition = true) } } }
                             }
                             Column(Modifier.width(upNextWidth).fillMaxHeight()) {
@@ -159,8 +173,8 @@ fun VideoPage(url: String, previewTitle: String?, previewThumbnail: String?, onB
                         LazyColumn(Modifier.fillMaxSize()) {
                             item {
                                 // Never taller than about two thirds of the window, so the title stays in view.
-                                Box(Modifier.fillMaxWidth().heightIn(max = playerMaxHeight), contentAlignment = Alignment.Center) {
-                                    playerBox(Modifier.fillMaxWidth().aspectRatio(16f / 9f))
+                                Box(Modifier.fillMaxWidth().background(androidx.compose.ui.graphics.Color.Black), contentAlignment = Alignment.Center) {
+                                    playerBox(Modifier.heightIn(max = playerMaxHeight).aspectRatio(ratio, matchHeightConstraintsFirst = true))
                                 }
                             }
                             item { Details(d, url, previewTitle, quality, onChannel) { h -> d?.let { startPlayback(it, h, keepPosition = true) } } }

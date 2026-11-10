@@ -13,4 +13,14 @@ object HomeTabs {
 
     fun show(tab: Int) { _request.value = tab }
     fun consumed() { _request.value = null }
+
+    private val _search = MutableStateFlow<Pair<String, com.edureminder.quicktube.core.model.SearchFilter?>?>(null)
+    /** A search to run in the YouTube tab, with an optional filter (it shows that tab and clears this once started). */
+    val search: StateFlow<Pair<String, com.edureminder.quicktube.core.model.SearchFilter?>?> = _search
+
+    fun searchYouTube(query: String, filter: com.edureminder.quicktube.core.model.SearchFilter? = null) {
+        _search.value = query to filter
+        show(YOUTUBE)
+    }
+    fun searchConsumed() { _search.value = null }
 }

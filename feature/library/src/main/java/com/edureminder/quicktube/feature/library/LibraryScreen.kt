@@ -1,5 +1,6 @@
 package com.edureminder.quicktube.feature.library
 
+import com.edureminder.quicktube.core.ui.readableWidth
 import com.edureminder.quicktube.core.designsystem.LocalBottomBarHeight
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -153,7 +154,7 @@ fun LibraryScreen(
             }
         }
 
-        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 16.dp + LocalBottomBarHeight.current)) {
+        LazyColumn(Modifier.weight(1f).readableWidth(900.dp), contentPadding = PaddingValues(bottom = 16.dp + LocalBottomBarHeight.current)) {
             if (ui.active.isNotEmpty() && sel == null && !searching) item {
                 ActiveCard(ui.active.first(), ui.active.size, speeds[ui.active.first().id] ?: 0, onOpenDownloading)
             }

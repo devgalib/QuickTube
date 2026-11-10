@@ -1,9 +1,11 @@
 plugins {
-    alias(libs.plugins.quicktube.android.library)
+    alias(libs.plugins.quicktube.kmp.library)
 }
 
-dependencies {
-    implementation(platform(libs.firebase.bom))
-    implementation(libs.firebase.analytics)
-    implementation(libs.firebase.crashlytics)
+kotlin {
+    sourceSets.androidMain.dependencies {
+        implementation(project.dependencies.platform(libs.firebase.bom))
+        implementation(libs.firebase.analytics)
+        implementation(libs.firebase.crashlytics)
+    }
 }

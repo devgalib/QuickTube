@@ -1,5 +1,6 @@
 package com.edureminder.quicktube.feature.settings
 
+import com.edureminder.quicktube.core.ui.readableWidth
 import kotlinx.coroutines.launch
 import com.edureminder.quicktube.core.designsystem.LocalBottomBarHeight
 import android.content.Intent
@@ -106,7 +107,7 @@ fun SettingsScreen(actions: SettingsActions) {
         is com.edureminder.quicktube.core.update.UpdateState.Installing -> "Installing update…"
         else -> "Version ${appVersion(context)}"
     }
-    LazyColumn(Modifier.fillMaxSize().statusBarsPadding(), contentPadding = PaddingValues(bottom = 24.dp + LocalBottomBarHeight.current)) {
+    LazyColumn(Modifier.fillMaxSize().readableWidth().statusBarsPadding(), contentPadding = PaddingValues(bottom = 24.dp + LocalBottomBarHeight.current)) {
         item {
             Text("Settings", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.padding(start = 24.dp, top = 18.dp, bottom = 6.dp))
         }

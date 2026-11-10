@@ -1,0 +1,74 @@
+name: Desktop
+
+# Builds the desktop app's installers: .deb and .rpm (Linux), .msi and .exe (Windows).
+# Run it by hand (Actions → Desktop → Run workflow), or push a tag like "desktop-v1.0.0" to also attach the
+# installers to a GitHub Release.
+on:
+  workflow_dispatch:
+  push:
+    tags: ["desktop-v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            tasks: packageDeb packageRpm
+          - os: windows-latest
+            tasks: packageMsi packageExe
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: rpmbuild (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm
+
+      # Windows has no ffmpeg; the installer ships it (GPL build from gyan.dev). VLC is installed by the user.
+      - name: Bundle ffmpeg (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $zip = "$env:RUNNER_TEMP\ffmpeg.zip"
+          Invoke-WebRequest https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip -OutFile $zip
+          Expand-Archive $zip -DestinationPath "$env:RUNNER_TEMP\ffmpeg"
+          New-Item -ItemType Directory -Force desktopApp\resources\windows | Out-Null
+          Get-ChildItem "$env:RUNNER_TEMP\ffmpeg" -Recurse -Include ffmpeg.exe,ffprobe.exe | Copy-Item -Destination desktopApp\resources\windows
+
+      - name: Version
+        id: version
+        shell: bash
+        run: |
+          base=$(grep -E '^appVersionBase=' gradle.properties | cut -d= -f2)
+          echo "name=$base.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build installers
+        shell: bash
+        run: |
+          tasks=""
+          for t in ${{ matrix.tasks }}; do tasks="$tasks :desktopApp:$t"; done
+          ./gradlew $tasks -PappVersionName=${{ steps.version.outputs.name }} --no-configuration-cache
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: quicktube-desktop-${{ runner.os }}
+          path: desktopApp/build/compose/binaries/main/*/*
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: desktopApp/build/compose/binaries/main/*/*

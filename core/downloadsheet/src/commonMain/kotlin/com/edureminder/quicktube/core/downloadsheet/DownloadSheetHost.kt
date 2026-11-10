@@ -1,0 +1,654 @@
+package com.edureminder.quicktube.core.downloadsheet
+
+import com.edureminder.quicktube.core.designsystem.shimmer
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.border
+import com.edureminder.quicktube.core.designsystem.icon.QtIcons
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Text
+import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.edureminder.quicktube.core.common.Format
+import com.edureminder.quicktube.core.designsystem.Badge
+import com.edureminder.quicktube.core.designsystem.PillButton
+import com.edureminder.quicktube.core.designsystem.QtIconButton
+import com.edureminder.quicktube.core.designsystem.pressable
+import androidx.compose.foundation.shape.CircleShape
+import com.edureminder.quicktube.core.model.DownloadOption
+import com.edureminder.quicktube.core.model.FormatKind
+import com.edureminder.quicktube.core.ui.rememberStorageAccess
+import com.edureminder.quicktube.core.ui.rememberToaster
+import com.edureminder.quicktube.core.ui.show
+import com.edureminder.quicktube.core.ui.CornerLabel
+import com.edureminder.quicktube.core.ui.ErrorBox
+import com.edureminder.quicktube.core.ui.LoadingBox
+import com.edureminder.quicktube.core.ui.Thumbnail
+import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
+import kotlinx.coroutines.flow.map
+import org.koin.compose.viewmodel.koinViewModel
+
+/** Place once near the root; shows the format picker whenever [DownloadSheetController.open] is called. */
+@Composable
+fun DownloadSheetHost(
+    onDownloadStarted: () -> Unit = {},
+    onOpenInBrowser: ((String) -> Unit)? = null,
+    /**
+     * Called when the quick lookup found nothing: the caller loads the page in a real (invisible) browser, the
+     * same way a pasted link is opened, and reopens the sheet with what it finds.
+     */
+    onDeepSearch: ((String) -> Unit)? = null,
+    /** "Open" in the "already downloaded" dialog: show that download (Play tab, or Downloading if unfinished). */
+    onOpenExisting: (com.edureminder.quicktube.core.model.DownloadTask) -> Unit = {},
+) {
+    val controller = koinInject<DownloadSheetController>()
+    val target by controller.target.collectAsStateWithLifecycle()
+    val t = target ?: return
+    val vm = koinViewModel<DownloadSheetViewModel>()
+    LaunchedEffect(t) { vm.load(t) }
+    val ui by vm.ui.collectAsStateWithLifecycle()
+    val toast = rememberToaster()
+    val storage = rememberStorageAccess()
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var showAll by remember(t) { mutableStateOf(false) }
+    // Optional cut (YouTube): the part of the video to download, in ms; null = all of it.
+    var cut by remember(t) { mutableStateOf<LongRange?>(null) }
+    val durationMs = ui.durationSec * 1000
+    var deepSearching by remember(t) { mutableStateOf(t is SheetTarget.Page && t.browserFirst && onDeepSearch != null) }
+    val notFound = !ui.loading && ui.options.isEmpty() && ui.error != null && !ui.isLive && !ui.gone && t is SheetTarget.Page
+    LaunchedEffect(t, notFound) {
+        val page = ui.pageUrl ?: (t as? SheetTarget.Page)?.url
+        if (!notFound || onDeepSearch == null || page == null) return@LaunchedEffect
+        deepSearching = true
+        onDeepSearch(page)
+        // The browser reopens the sheet with a new target when it finds the video; otherwise show the error.
+        kotlinx.coroutines.delay(35_000)
+        deepSearching = false
+    }
+    // Android 10 and older need storage permission before saving into Downloads.
+    var pending by remember { mutableStateOf<DownloadOption?>(null) }
+    val askStorage = {
+        storage.request { granted ->
+            val o = pending
+            pending = null
+            if (!granted) toast.show("Storage permission is needed to save downloads", true)
+            else if (o != null) {
+                vm.download(o, cut)
+                toast.show("Added to downloads")
+                controller.dismiss()
+                onDownloadStarted()
+            }
+        }
+    }
+
+    val downloadNow = start@{ o: DownloadOption ->
+        if (!storage.granted()) {
+            pending = o
+            askStorage()
+            return@start
+        }
+        vm.download(o, cut)
+        toast.show("Added to downloads")
+        controller.dismiss()
+        onDownloadStarted()
+    }
+    var later by remember(t) { mutableStateOf<DownloadOption?>(null) }
+    later?.let { o ->
+        DownloadLaterDialog(onDismiss = { later = null }) { startAfter, wifiOnly ->
+            later = null
+            if (!storage.granted()) { pending = o; askStorage(); return@DownloadLaterDialog }
+            vm.download(o, cut, startAfter, wifiOnly)
+            toast.show(if (wifiOnly && startAfter == 0L) "Will download on Wi-Fi" else "Scheduled for " + clockTime(startAfter))
+            controller.dismiss()
+            onDownloadStarted()
+        }
+    }
+    // Same video in the same quality already saved (or still downloading): ask before downloading it again.
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    var duplicate by remember(t) { mutableStateOf<Pair<com.edureminder.quicktube.core.model.DownloadTask, DownloadOption>?>(null) }
+    val startDownload = { o: DownloadOption ->
+        scope.launch {
+            // A cut is its own file: no "already downloaded" question.
+            val existing = if (cut != null) null else vm.existing(o)
+            if (existing != null) duplicate = existing to o else downloadNow(o)
+        }
+        Unit
+    }
+    duplicate?.let { (task, option) ->
+        AlreadyDownloadedDialog(
+            task = task,
+            onOpen = { duplicate = null; controller.dismiss(); onOpenExisting(task) },
+            onDownloadAgain = { duplicate = null; downloadNow(option) },
+            onDismiss = { duplicate = null },
+        )
+    }
+    // A sensible choice is ready: ~720p video (or the best below it), else the first format.
+    var selectedId by remember(t) { mutableStateOf<String?>(null) }
+    // Formats of one video get an MP3 choice too (a post's photos and videos don't).
+    val options = remember(ui.options, ui.items, ui.durationSec) { if (ui.items) ui.options else withMp3(ui.options, ui.durationSec) }
+    val cuttableOptions = options.filter { it.protocol == com.edureminder.quicktube.core.model.StreamProtocol.HTTP && !it.extractAudio && it.ext != "mp3" }
+    val choices = if (cut != null) cuttableOptions else options
+    val prefs = koinInject<com.edureminder.quicktube.core.data.SettingsRepository>()
+    val preferred by remember(prefs) { prefs.settings.map { it.defaultQuality } }.collectAsStateWithLifecycle("ASK")
+    val selected = choices.firstOrNull { it.id == selectedId } ?: defaultChoice(choices, preferred)
+    // A post's photos and videos: all of them ticked to start with.
+    var picked by remember(t, ui.options) { mutableStateOf(ui.options.map { it.id }.toSet()) }
+    val downloadPicked = start@{
+        val chosen = ui.options.filter { it.id in picked }
+        if (chosen.isEmpty()) return@start
+        if (!storage.granted()) { askStorage(); return@start }
+        vm.downloadItems(chosen)
+        toast.show(if (chosen.size == 1) "Added to downloads" else "${chosen.size} added to downloads")
+        controller.dismiss()
+        onDownloadStarted()
+    }
+
+    ModalBottomSheet(onDismissRequest = controller::dismiss, sheetState = sheetState, containerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
+        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
+            AnimatedContent(showAll, label = "formats") { all ->
+                Column(Modifier.fillMaxWidth()) {
+                    if (all) {
+                        Row(Modifier.padding(start = 8.dp, end = 20.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                            QtIconButton(QtIcons.ArrowBack, "Back", { showAll = false })
+                            Text("All formats", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(start = 4.dp))
+                        }
+                    } else if (!ui.loading && !deepSearching) {
+                        Header(ui, onCut = if (ui.cuttable && ui.options.isNotEmpty() && durationMs > 0) ({
+                            cut = if (cut == null) 0L..durationMs else null
+                        }) else null, cutting = cut != null)
+                        cut?.let { c -> CutPanel(c, durationMs, onChange = { cut = it }, onClose = { cut = null }) }
+                    }
+                    when {
+                        ui.loading -> SheetSkeleton(null)
+                        deepSearching -> SheetSkeleton("Looking for media on the page…")
+                        ui.options.isEmpty() -> Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                            ErrorBox(ui.error ?: "No downloadable media found on this page", if (ui.isLive) null else vm::retry,
+                                Modifier.fillMaxWidth().heightIn(min = 180.dp))
+                            if (ui.report.isNotEmpty()) TechDetails(ui.report)
+                            val page = ui.pageUrl
+                            if (onOpenInBrowser != null && page != null && !ui.isLive) PillButton(
+                                "Open in QuickTube browser", { controller.dismiss(); onOpenInBrowser(page) },
+                                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                            )
+                        }
+                        ui.items -> LazyColumn(Modifier.heightIn(max = 420.dp)) {
+                            item { SectionLabel(if (ui.options.size > 1) "${ui.options.size} items in this post" else "In this post") }
+                            items(ui.options, key = { it.id }) { o ->
+                                ItemRow(o, o.id in picked) { picked = if (o.id in picked) picked - o.id else picked + o.id }
+                            }
+                        }
+                        else -> {
+                            // A cut needs plain files (no HLS, no "audio from video").
+                            val list = if (all) ordered(choices) else quickPicks(choices)
+                            LazyColumn(Modifier.heightIn(max = if (all) 470.dp else 380.dp)) {
+                                val audio = list.filter { it.kind == FormatKind.AUDIO }
+                                val video = list.filter { it.kind == FormatKind.VIDEO }
+                                if (audio.isNotEmpty()) {
+                                    item { SectionLabel("Music") }
+                                    items(audio, key = { it.id }) { OptionRow(it, all, it.id == selected?.id) { selectedId = it.id } }
+                                }
+                                if (video.isNotEmpty()) {
+                                    item { SectionLabel("Video") }
+                                    items(video, key = { it.id }) { OptionRow(it, all, it.id == selected?.id) { selectedId = it.id } }
+                                }
+                                if (!all && choices.size > list.size) item {
+                                    Row(
+                                        Modifier.fillMaxWidth().padding(top = 4.dp).pressable(scaleDown = 0.99f, onClick = { showAll = true })
+                                            .padding(horizontal = 20.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text("More formats", style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium,
+                                            modifier = Modifier.weight(1f))
+                                        Text("All ${choices.size}", style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        Icon(QtIcons.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (!ui.loading && !deepSearching && ui.items && ui.options.isNotEmpty()) {
+                val n = picked.size
+                PillButton(
+                    when {
+                        ui.options.size == 1 -> "Download"
+                        n == ui.options.size -> "Download all ($n)"
+                        else -> "Download $n item${if (n == 1) "" else "s"}"
+                    },
+                    { downloadPicked() },
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 10.dp),
+                    icon = QtIcons.Download, enabled = n > 0,
+                )
+            } else if (!ui.loading && !deepSearching && selected != null) {
+                val size = selected.shownSize()
+                val c = cut
+                val shown = if (c != null && durationMs > 0 && size > 0) (size * ((c.last - c.first).toDouble() / durationMs)).toLong() else size
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    PillButton(
+                        // The cut's times are in the panel above; the button only says it's a cut.
+                        (if (c != null) "Download cut · " else "Download · ") + shortName(selected) +
+                            (if (shown > 0) " · " + (if (c != null) "~" else "") + Format.bytes(shown) else ""),
+                        { startDownload(selected) },
+                        Modifier.weight(1f),
+                        icon = QtIcons.Download,
+                    )
+                    // "Download later": on Wi-Fi, tonight, or at a chosen time.
+                    QtIconButton(QtIcons.Schedule, "Download later", { later = selected }, Modifier.padding(start = 8.dp),
+                        container = MaterialTheme.colorScheme.surfaceContainerHigh)
+                }
+            }
+        }
+    }
+}
+
+/** ~720p video, or the best below it; audio only when the page has no video. */
+/**
+ * The format the sheet starts on, from Settings → Download → Default quality: "ASK" / "P720" is about 720p, "P360" and
+ * "P1080" the nearest to those, "BEST" the largest video, "AUDIO" the best audio and "MP3" the MP3.
+ */
+internal fun defaultChoice(all: List<DownloadOption>, preference: String = "ASK"): DownloadOption? {
+    val video = ordered(all).filter { it.kind == FormatKind.VIDEO }
+    fun near(h: Int) = video.lastOrNull { it.height in 1..h } ?: video.firstOrNull { it.height > h }
+    val audio = all.filter { it.kind == FormatKind.AUDIO }
+    val picked = when (preference) {
+        "P360" -> near(360)
+        "P1080" -> near(1080)
+        "BEST" -> video.maxByOrNull { it.height }
+        "AUDIO" -> audio.firstOrNull { it.ext != "mp3" }
+        "MP3" -> audio.firstOrNull { it.ext == "mp3" }
+        else -> null
+    }
+    return picked ?: video.lastOrNull { it.height in 1..720 } ?: video.getOrNull(video.size / 2) ?: all.firstOrNull()
+}
+
+/** "Audio only" from a video shows about an eighth of the video's size; formats made from it carry their own estimate. */
+private fun DownloadOption.shownSize(): Long =
+    if (extractAudio && totalSize > 0 && ext !in setOf("mp3", "flac", "wav", "aac", "opus")) totalSize / 8 else totalSize
+
+/** "720p", "HD", "M4A" — what the Download button says. */
+private fun shortName(o: DownloadOption): String = when {
+    o.kind == FormatKind.VIDEO && o.height > 0 -> "${o.height}p"
+    else -> o.title.substringAfterLast('(', "").substringBefore(')').takeIf { it.isNotBlank() && it.length <= 8 }
+        ?: o.title.substringBefore(" (").take(14)
+}
+
+/** Shimmering placeholder shaped like the sheet, so loading feels like the content arriving. */
+@Composable
+private fun SheetSkeleton(caption: String?) {
+    val bone = MaterialTheme.colorScheme.surfaceContainerHighest
+    Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.width(104.dp).aspectRatio(16f / 9f).clip(RoundedCornerShape(12.dp)).background(bone).shimmer())
+            Column(Modifier.padding(start = 14.dp).weight(1f)) {
+                Box(Modifier.fillMaxWidth(0.9f).height(14.dp).clip(RoundedCornerShape(7.dp)).background(bone).shimmer())
+                Box(Modifier.padding(top = 8.dp).fillMaxWidth(0.6f).height(14.dp).clip(RoundedCornerShape(7.dp)).background(bone).shimmer())
+            }
+        }
+        Spacer(Modifier.height(18.dp))
+        repeat(4) { i ->
+            Row(Modifier.fillMaxWidth().height(52.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(bone).shimmer())
+                Box(Modifier.padding(start = 14.dp).width(if (i % 2 == 0) 120.dp else 150.dp).height(13.dp).clip(RoundedCornerShape(7.dp)).background(bone).shimmer())
+                Spacer(Modifier.weight(1f))
+                Box(Modifier.width(48.dp).height(12.dp).clip(RoundedCornerShape(6.dp)).background(bone).shimmer())
+                Box(Modifier.padding(start = 14.dp).size(20.dp).clip(CircleShape).background(bone).shimmer())
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Box(Modifier.fillMaxWidth().height(48.dp).clip(RoundedCornerShape(24.dp)).background(bone).shimmer())
+        caption?.let {
+            Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 10.dp))
+        }
+    }
+}
+
+/**
+ * Lowest to highest quality. Some sites don't say a file's resolution (Facebook's SD/HD files), so when every
+ * video's size is known, size decides; otherwise resolution does.
+ */
+private fun ordered(all: List<DownloadOption>): List<DownloadOption> {
+    val audio = all.filter { it.kind == FormatKind.AUDIO }
+    val video = all.filter { it.kind == FormatKind.VIDEO }
+    val sorted = if (video.isNotEmpty() && video.all { it.totalSize > 0 }) video.sortedBy { it.totalSize } else video.sortedBy { it.height }
+    return audio + sorted
+}
+
+/** Like SnapTube: the two best audio formats and three videos (low, middle, best — up to 4K). "More formats" lists all. */
+private fun quickPicks(all: List<DownloadOption>): List<DownloadOption> {
+    val audio = all.filter { it.kind == FormatKind.AUDIO }.take(2)
+    val video = ordered(all).filter { it.kind == FormatKind.VIDEO }
+    if (video.size <= 3) return audio + video
+    val byHeight = video.all { it.height > 0 }
+    val low = if (byHeight) video.lastOrNull { it.height <= 360 } ?: video.first() else video.first()
+    val mid = if (byHeight) video.lastOrNull { it.height in 361..720 } ?: video[video.size / 2] else video[video.size / 2]
+    val picks = listOf(low, mid, video.last()).distinct()
+    val filled = if (picks.size < 3) picks + (video - picks.toSet()).take(3 - picks.size) else picks
+    return audio + filled.sortedBy { video.indexOf(it) }
+}
+
+/** Collapsible diagnostics so users can tell us exactly why a site failed. */
+@Composable
+private fun TechDetails(report: List<String>) {
+    var open by remember { mutableStateOf(false) }
+    val clipboard = androidx.compose.ui.platform.LocalClipboardManager.current
+    val toast = rememberToaster()
+    Column(Modifier.padding(horizontal = 20.dp).fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).pressable(onClick = { open = !open }).padding(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(QtIcons.Info, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Technical details", style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f).padding(start = 8.dp))
+            Icon(QtIcons.ExpandMore, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (open) {
+            val text = report.joinToString("\n")
+            Text(
+                text, style = MaterialTheme.typography.bodySmall.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(12.dp),
+            )
+            Text(
+                "Copy details", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 4.dp).clip(RoundedCornerShape(8.dp)).pressable(onClick = {
+                    clipboard.setText(androidx.compose.ui.text.AnnotatedString(text))
+                    toast.show("Copied")
+                }).padding(8.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun Header(ui: SheetUi, onCut: (() -> Unit)? = null, cutting: Boolean = false) {
+    Row(Modifier.padding(start = 20.dp, end = if (onCut != null) 8.dp else 20.dp, top = 2.dp, bottom = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Thumbnail(ui.thumbnail, Modifier.width(104.dp).aspectRatio(16f / 9f), corner = 12) { CornerLabel(Format.duration(ui.durationSec)) }
+        Column(Modifier.padding(start = 14.dp).weight(1f)) {
+            Text(ui.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold, maxLines = 2,
+                overflow = TextOverflow.Ellipsis)
+            ui.pageUrl?.let { u ->
+                com.edureminder.quicktube.core.common.Urls.host(u)?.removePrefix("www.")?.let { host ->
+                    Text(host, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 3.dp))
+                }
+            }
+        }
+        // Small and quiet on purpose: cutting is an extra, not the main action.
+        if (onCut != null) QtIconButton(
+            QtIcons.ContentCut, if (cutting) "Download the whole video" else "Cut: download only a part",
+            onCut, tint = if (cutting) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            container = if (cutting) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f) else androidx.compose.ui.graphics.Color.Transparent,
+            size = 40.dp, iconSize = 20.dp, modifier = Modifier.padding(start = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(
+        text, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, top = 10.dp, bottom = 2.dp),
+    )
+}
+
+/** One-line hint under a format in the full list (what it's good for). */
+private fun hint(o: DownloadOption): String = when {
+    o.kind == FormatKind.AUDIO -> when (o.ext) {
+        "m4a" -> "M4A, best choice for phones"
+        "mp3" -> "MP3, plays on every device"
+        else -> "${o.ext.uppercase()} audio"
+    }
+    o.height in 1..480 -> "Normal quality, saves data"
+    o.height in 481..720 -> "Clear view, quick to download"
+    o.height in 721..1100 -> "Sharp detail for full screen"
+    o.height > 1100 -> "Best detail for big screens"
+    else -> o.info
+}
+
+@Composable
+private fun OptionRow(o: DownloadOption, detailed: Boolean, selected: Boolean, onSelect: () -> Unit) {
+    val audio = o.kind == FormatKind.AUDIO
+    val tint = if (audio) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
+    val bg = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.08f) else androidx.compose.ui.graphics.Color.Transparent
+    Row(
+        Modifier.fillMaxWidth().background(bg).pressable(scaleDown = 0.99f, haptic = true, onClick = onSelect)
+            .heightIn(min = if (detailed) 58.dp else 50.dp).padding(horizontal = 20.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(Modifier.size(32.dp).clip(RoundedCornerShape(10.dp)).background(tint.copy(alpha = 0.13f)), contentAlignment = Alignment.Center) {
+            Icon(if (audio) QtIcons.MusicNote else QtIcons.PlayCircle, null, tint = tint, modifier = Modifier.size(18.dp))
+        }
+        Column(Modifier.weight(1f).padding(start = 14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(o.title, style = MaterialTheme.typography.bodyMedium, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                o.label?.takeIf { it == "HD" }?.let { Badge(it, Modifier.padding(start = 6.dp), color = MaterialTheme.colorScheme.primary) }
+            }
+            if (detailed) Text(hint(o), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        val size = o.shownSize()
+        Text(if (size > 0) (if (o.extractAudio) "~" else "") + Format.bytes(size) else "", style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(horizontal = 12.dp))
+        // Radio mark: filled with a check when chosen.
+        Box(
+            Modifier.size(20.dp).clip(CircleShape).background(if (selected) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent)
+                .then(if (selected) Modifier else Modifier.border(1.5.dp, MaterialTheme.colorScheme.outline, CircleShape)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (selected) Icon(QtIcons.Check, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(14.dp))
+        }
+    }
+}
+
+/** One photo or video of a post, with its picture and a tick box. */
+@Composable
+private fun ItemRow(o: DownloadOption, checked: Boolean, onToggle: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().pressable(scaleDown = 0.99f, haptic = true, onClick = onToggle).padding(horizontal = 20.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Thumbnail(o.thumbnail, Modifier.size(56.dp), corner = 10) {
+            if (o.kind == FormatKind.VIDEO) Icon(QtIcons.PlayCircle, null, tint = androidx.compose.ui.graphics.Color.White,
+                modifier = Modifier.align(Alignment.Center).size(22.dp))
+        }
+        Column(Modifier.weight(1f).padding(start = 14.dp)) {
+            Text(o.title, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+            Text(o.info, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Box(
+            Modifier.size(22.dp).clip(RoundedCornerShape(6.dp)).background(if (checked) MaterialTheme.colorScheme.primary else androidx.compose.ui.graphics.Color.Transparent)
+                .then(if (checked) Modifier else Modifier.border(1.5.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(6.dp))),
+            contentAlignment = Alignment.Center,
+        ) { if (checked) Icon(QtIcons.Check, null, tint = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.size(16.dp)) }
+    }
+}
+
+/** "Already downloaded — download it again?" with the existing file shown, like other downloaders. */
+@Composable
+private fun AlreadyDownloadedDialog(
+    task: com.edureminder.quicktube.core.model.DownloadTask,
+    onOpen: () -> Unit,
+    onDownloadAgain: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val done = task.status == com.edureminder.quicktube.core.model.DownloadStatus.COMPLETED
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        androidx.compose.material3.Surface(
+            shape = RoundedCornerShape(24.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh, tonalElevation = 6.dp,
+        ) {
+            Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(if (done) "Already downloaded" else "Already downloading", style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold)
+                Text(if (done) "Do you want to download it again?" else "It's in your downloads now. Download another copy?",
+                    style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp))
+                Row(
+                    Modifier.padding(top = 16.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                        .background(MaterialTheme.colorScheme.surfaceContainerHighest).padding(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Thumbnail(task.thumbnail, Modifier.width(88.dp).aspectRatio(16f / 9f), corner = 10)
+                    Column(Modifier.padding(start = 12.dp).weight(1f)) {
+                        Text(task.title + (task.quality?.let { " ($it)" } ?: ""), style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        val meta = listOfNotNull(
+                            task.durationSec.takeIf { it > 0 }?.let { Format.duration(it) },
+                            task.totalBytes.takeIf { it > 0 }?.let { Format.bytes(it) },
+                        ).joinToString("  ·  ")
+                        if (meta.isNotEmpty()) Text(meta, style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
+                    }
+                }
+                Row(Modifier.padding(top = 18.dp).fillMaxWidth(), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(10.dp)) {
+                    PillButton(if (done) "Open" else "View", onOpen, Modifier.weight(1f), secondary = true)
+                    PillButton("Download again", onDownloadAgain, Modifier.weight(1.9f))
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Choosing the part of the video to download: a range slider over the whole video, and the start and end as times that
+ * can be typed exactly (1:23, 1:02:03).
+ */
+@Composable
+private fun CutPanel(range: LongRange, durationMs: Long, onChange: (LongRange) -> Unit, onClose: () -> Unit) {
+    val minLen = minOf(1000L, durationMs)
+    Column(
+        Modifier.padding(horizontal = 20.dp, vertical = 4.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHigh).padding(start = 14.dp, end = 6.dp, top = 6.dp, bottom = 8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(QtIcons.ContentCut, null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
+            Text("Cut · ${clipTime(range.last - range.first)}", style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.weight(1f).padding(start = 8.dp))
+            QtIconButton(QtIcons.Close, "Cancel cut", onClose, size = 36.dp, iconSize = 18.dp, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        androidx.compose.material3.RangeSlider(
+            value = range.first.toFloat()..range.last.toFloat(),
+            onValueChange = { v ->
+                val a = v.start.toLong().coerceIn(0, durationMs - minLen)
+                val b = v.endInclusive.toLong().coerceIn(a + minLen, durationMs)
+                onChange(a..b)
+            },
+            valueRange = 0f..durationMs.toFloat(),
+            modifier = Modifier.padding(end = 8.dp),
+        )
+        Row(Modifier.padding(end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            TimeField("Start", range.first, Modifier.weight(1f)) { ms -> onChange(ms.coerceIn(0, range.last - minLen)..range.last) }
+            Text("–", modifier = Modifier.padding(horizontal = 10.dp), color = MaterialTheme.colorScheme.onSurfaceVariant)
+            TimeField("End", range.last, Modifier.weight(1f)) { ms -> onChange(range.first..ms.coerceIn(range.first + minLen, durationMs)) }
+        }
+    }
+}
+
+/** A time the user can type ("1:23"); applied when it's a valid time, reset to [ms] when left invalid. */
+@Composable
+private fun TimeField(label: String, ms: Long, modifier: Modifier, onSet: (Long) -> Unit) {
+    var text by remember { mutableStateOf(clipTime(ms)) }
+    var editing by remember { mutableStateOf(false) }
+    LaunchedEffect(ms) { if (!editing) text = clipTime(ms) }
+    androidx.compose.material3.OutlinedTextField(
+        value = text,
+        onValueChange = { v ->
+            text = v.filter { it.isDigit() || it == ':' }.take(9)
+            parseClipTime(text)?.let(onSet)
+        },
+        label = { Text(label) },
+        singleLine = true,
+        textStyle = MaterialTheme.typography.bodyMedium,
+        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = androidx.compose.ui.text.input.KeyboardType.Number),
+        modifier = modifier.onFocusChanged { f ->
+            editing = f.isFocused
+            if (!f.isFocused) text = clipTime(ms)
+        },
+    )
+}
+
+private fun clockTime(at: Long) = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(at))
+
+/** "Download later": when on Wi-Fi, in an hour, tonight at 1:00, or at a time picked on a clock. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun DownloadLaterDialog(onDismiss: () -> Unit, onPick: (startAfter: Long, wifiOnly: Boolean) -> Unit) {
+    var picking by remember { mutableStateOf(false) }
+    var wifi by remember { mutableStateOf(false) }
+    if (picking) {
+        val now = java.util.Calendar.getInstance()
+        val state = androidx.compose.material3.rememberTimePickerState(now.get(java.util.Calendar.HOUR_OF_DAY), now.get(java.util.Calendar.MINUTE))
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Start at") },
+            text = { androidx.compose.material3.TimePicker(state) },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { onPick(com.edureminder.quicktube.core.model.DownloadLater.at(state.hour, state.minute), wifi) }) { Text("Schedule") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
+        )
+        return
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Download later") },
+        text = {
+            Column {
+                LaterRow("When on Wi-Fi", "Saves mobile data") { onPick(0, true) }
+                LaterRow("In 1 hour", null) { onPick(System.currentTimeMillis() + 3_600_000L, wifi) }
+                LaterRow("Tonight at " + clockTime(com.edureminder.quicktube.core.model.DownloadLater.tonight()), "While you sleep") {
+                    onPick(com.edureminder.quicktube.core.model.DownloadLater.tonight(), wifi)
+                }
+                LaterRow("Pick a time…", null) { picking = true }
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Only on Wi-Fi", modifier = Modifier.weight(1f))
+                    androidx.compose.material3.Switch(wifi, { wifi = it })
+                }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun LaterRow(title: String, hint: String?, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).pressable(scaleDown = 0.98f, onClick = onClick).padding(vertical = 10.dp, horizontal = 4.dp)) {
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        if (hint != null) Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}

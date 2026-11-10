@@ -1,5 +1,6 @@
 package com.edureminder.quicktube.feature.video
 
+import com.edureminder.quicktube.core.ui.readableWidth
 import com.edureminder.quicktube.core.designsystem.QtIconButton
 import com.edureminder.quicktube.core.designsystem.icon.QtIcons
 import android.content.Intent
@@ -161,7 +162,9 @@ fun VideoScreen(
     }
 
     Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).statusBarsPadding()) {
-        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) {
+        // Tablets and phones in landscape: the player keeps the page's width and leaves room for the title below.
+        Box(Modifier.fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
+        Box(Modifier.readableWidth(960.dp).heightIn(max = 540.dp).aspectRatio(16f / 9f).background(Color.Black)) {
             if (details is LoadState.Success) {
                 VideoPlayerBox(vm.player, playback, Modifier.fillMaxSize(), onToggleFullscreen = { fullscreen = true },
                     onCollapse = { leave() }, showPrevNext = false, onRetry = vm::retry, options = playerOptions, onPip = { leave(toPip = true) },
@@ -171,13 +174,14 @@ fun VideoScreen(
                 if (details !is LoadState.Success) Icon(QtIcons.ArrowBack, "Back", tint = Color.White)
             }
         }
+        }
         when (val d = details) {
             is LoadState.Loading -> VideoPageSkeleton(previewTitle, Modifier.fillMaxWidth().weight(1f))
             is LoadState.Error -> ErrorBox(d.message, vm::retry, Modifier.fillMaxWidth().weight(1f))
             is LoadState.Success -> {
                 val v = d.data
                 val comments by vm.comments.collectAsStateWithLifecycle()
-                LazyColumn(Modifier.weight(1f), contentPadding = WindowInsets.navigationBars.asPaddingValues()) {
+                LazyColumn(Modifier.weight(1f).readableWidth(960.dp), contentPadding = WindowInsets.navigationBars.asPaddingValues()) {
                     if (inQueue != null) item {
                         Row(
                             Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp).clip(RoundedCornerShape(12.dp))

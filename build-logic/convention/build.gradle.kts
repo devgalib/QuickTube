@@ -13,6 +13,7 @@ dependencies {
     compileOnly(libs.kotlin.gradle.plugin)
     compileOnly(libs.compose.gradle.plugin)
     compileOnly(libs.ksp.gradle.plugin)
+    compileOnly(libs.compose.multiplatform.gradle.plugin)
 }
 
 gradlePlugin {
@@ -32,6 +33,18 @@ gradlePlugin {
         register("androidFeature") {
             id = "quicktube.android.feature"
             implementationClass = "AndroidFeatureConventionPlugin"
+        }
+        register("kmpLibrary") {
+            id = "quicktube.kmp.library"
+            implementationClass = "KmpLibraryConventionPlugin"
+        }
+        register("kmpCompose") {
+            id = "quicktube.kmp.compose"
+            implementationClass = "KmpComposeConventionPlugin"
+        }
+        register("kmpFeature") {
+            id = "quicktube.kmp.feature"
+            implementationClass = "KmpFeatureConventionPlugin"
         }
         register("androidRoom") {
             id = "quicktube.android.room"

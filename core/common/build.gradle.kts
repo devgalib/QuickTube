@@ -1,8 +1,12 @@
 plugins {
-    alias(libs.plugins.quicktube.android.library)
+    alias(libs.plugins.quicktube.kmp.library)
 }
 
-dependencies {
-    api(projects.core.model)
-    implementation(libs.androidx.core.ktx)
+kotlin {
+    sourceSets.commonMain.dependencies {
+        api(projects.core.model)
+    }
+    sourceSets.androidMain.dependencies {
+        implementation(libs.androidx.core.ktx)
+    }
 }

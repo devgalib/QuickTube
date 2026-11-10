@@ -1,8 +1,14 @@
 plugins {
-    alias(libs.plugins.quicktube.android.library)
+    alias(libs.plugins.quicktube.kmp.library)
 }
 
-dependencies {
-    api(projects.core.model)
-    implementation(libs.androidx.datastore.preferences)
+kotlin {
+    sourceSets.commonMain.dependencies {
+        api(projects.core.model)
+        implementation(projects.core.common)
+        api(libs.androidx.datastore.preferences.core)
+    }
+    sourceSets.androidMain.dependencies {
+        implementation(libs.androidx.datastore.preferences)
+    }
 }

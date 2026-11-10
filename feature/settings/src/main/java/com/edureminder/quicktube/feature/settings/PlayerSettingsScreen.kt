@@ -1,5 +1,6 @@
 package com.edureminder.quicktube.feature.settings
 
+import com.edureminder.quicktube.core.ui.readableWidth
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -49,7 +50,7 @@ fun PlayerSettingsScreen(onBack: () -> Unit) {
     fun set(transform: (AppSettings) -> AppSettings) = vm.update(transform)
 
     Scaffold(topBar = { QtTopBar("Player", onBack) }) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState())) {
+        Column(Modifier.fillMaxSize().padding(pad).readableWidth().verticalScroll(rememberScrollState())) {
             GroupLabel("History")
             QtCard {
                 SwitchRow(

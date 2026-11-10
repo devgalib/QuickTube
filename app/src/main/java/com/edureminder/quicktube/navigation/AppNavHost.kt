@@ -27,6 +27,7 @@ import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -48,6 +49,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.toRoute
 import com.edureminder.quicktube.core.data.LibraryRepository
 import com.edureminder.quicktube.core.downloadsheet.DownloadSheetHost
+import com.edureminder.quicktube.core.ui.isWide
+import androidx.compose.foundation.layout.fillMaxHeight
 import com.edureminder.quicktube.core.model.DownloadStatus
 import com.edureminder.quicktube.core.model.ItemKind
 import com.edureminder.quicktube.core.model.MediaItem
@@ -164,7 +167,25 @@ fun AppNavHost(nav: NavHostController) {
     val navBar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     // Surface (not a plain Box) so screens get the theme's content colour, like Scaffold provided before.
     androidx.compose.material3.Surface(color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
-    Box(Modifier.fillMaxSize()) {
+    // Tablets, foldables and phones in landscape: the tabs move to a side rail instead of the floating bottom bar.
+    androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxSize()) {
+    val widthClass = com.edureminder.quicktube.core.ui.WidthClass.of(maxWidth)
+    val rail = widthClass.isWide && onTab && !barHidden.value
+    val selectedTab = tabs.indexOfFirst { t -> dest?.hierarchy?.any { it.hasRoute(t.route::class) } == true }
+    val selectTab = { i: Int ->
+        nav.navigate(tabs[i].route) {
+            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
+    CompositionLocalProvider(com.edureminder.quicktube.core.ui.LocalWidthClass provides widthClass) {
+    Row(Modifier.fillMaxSize()) {
+    if (rail) com.edureminder.quicktube.core.ui.QtNavRail(
+        tabs.map { com.edureminder.quicktube.core.ui.QtNavItem(it.label, it.icon, it.selectedIcon) }, selectedTab.coerceAtLeast(0), { selectTab(it) },
+        badges = mapOf(1 to activeCount), expanded = widthClass == com.edureminder.quicktube.core.ui.WidthClass.EXPANDED,
+    )
+    Box(Modifier.weight(1f).fillMaxHeight()) {
         // Tab screens draw behind the floating bar (and see their content through the gaps around it);
         // other screens simply stop above the mini player.
         CompositionLocalProvider(
@@ -418,21 +439,13 @@ fun AppNavHost(nav: NavHostController) {
             if (miniVisible) MiniPlayer(onExpand = {
                 if (galleryId != null) GalleryPlayerActivity.start(context, galleryId) else nav.navigate(PlayerRoute) { launchSingleTop = true }
             })
-            if (onTab && !barHidden.value) {
-                val selected = tabs.indexOfFirst { t -> dest?.hierarchy?.any { it.hasRoute(t.route::class) } == true }
-                FloatingNavBar(
-                    tabs, selected,
-                    onSelect = { i ->
-                        nav.navigate(tabs[i].route) {
-                            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
-                            launchSingleTop = true
-                            restoreState = true
-                        }
-                    },
-                    badges = mapOf(1 to activeCount),
-                )
+            if (onTab && !barHidden.value && !rail) {
+                FloatingNavBar(tabs, selectedTab, onSelect = { selectTab(it) }, badges = mapOf(1 to activeCount))
             } else if (miniVisible) Spacer(Modifier.navigationBarsPadding().height(8.dp))
         }
+    }
+    }
+    }
     }
     }
     DownloadSheetHost(onOpenInBrowser = ::openUrl, onOpenExisting = { task ->

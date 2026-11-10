@@ -1,5 +1,6 @@
 package com.edureminder.quicktube.feature.settings
 
+import com.edureminder.quicktube.core.ui.readableWidth
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -53,7 +54,7 @@ fun DownloadSettingsScreen(onBack: () -> Unit) {
     val s by vm.settings.collectAsStateWithLifecycle()
     var dialog by remember { mutableStateOf<String?>(null) }
     Scaffold(topBar = { QtTopBar("Download settings", onBack) }) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad)) {
+        Column(Modifier.fillMaxSize().padding(pad).readableWidth()) {
             GroupLabel("Storage")
             QtCard {
                 val context = androidx.compose.ui.platform.LocalContext.current
@@ -147,7 +148,7 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
     val vm = koinViewModel<SettingsViewModel>()
     val s by vm.settings.collectAsStateWithLifecycle()
     Scaffold(topBar = { QtTopBar("Notifications", onBack) }) { pad ->
-        Column(Modifier.fillMaxSize().padding(pad)) {
+        Column(Modifier.fillMaxSize().padding(pad).readableWidth()) {
             NotificationPermissionBanner()
             GroupLabel("Download notifications")
             QtCard {
@@ -174,7 +175,7 @@ fun RegionScreen(onBack: () -> Unit) {
         listOf("") + Locale.getISOCountries().sortedBy { Locale("", it).displayCountry }
     }
     Scaffold(topBar = { QtTopBar("Content region", onBack) }) { pad ->
-        LazyColumn(Modifier.fillMaxSize().padding(pad)) {
+        LazyColumn(Modifier.fillMaxSize().padding(pad).readableWidth()) {
             item {
                 Text("Trending and music feeds follow this region. Pull to refresh the feed after changing it.", style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(16.dp))
@@ -193,7 +194,7 @@ fun AboutScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     Scaffold(topBar = { QtTopBar("About", onBack) }) { pad ->
         Column(
-            Modifier.fillMaxSize().padding(pad).verticalScroll(rememberScrollState()).padding(24.dp),
+            Modifier.fillMaxSize().padding(pad).readableWidth().verticalScroll(rememberScrollState()).padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             androidx.compose.foundation.layout.Box(

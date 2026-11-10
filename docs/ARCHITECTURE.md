@@ -75,9 +75,15 @@ feature/
   placeholder. Back always closes the video. Screens report their video through `PipState` (`core:playerui`).
 - **Our games** (home row + See all): Firebase Remote Config, cached and refreshed once per interval; see [PROMO_GAMES.md](PROMO_GAMES.md).
 
+## Desktop app (Compose Multiplatform)
+
+`desktopApp/` is the Linux/Windows/macOS app. The core modules (and `feature:home`, `feature:search`) are Kotlin
+Multiplatform with an Android target and a JVM `desktop` target (`quicktube.kmp.library` / `.kmp.compose` /
+`.kmp.feature` convention plugins); platform pieces sit in `androidMain` / `desktopMain`. Details, the module map and
+the responsive-layout rules are in [DESKTOP.md](DESKTOP.md).
+
 ## iOS / multiplatform path
 
-The domain is already isolated: `core:model`, `core:common`, `core:data` interfaces, `core:database` (Room KMP) and
-`core:datastore` (DataStore KMP) can move to `commonMain` with mostly mechanical changes, and the Compose UI can move to Compose
-Multiplatform. Platform-specific pieces would need iOS counterparts: NewPipe Extractor (JVM-only), the download service, MediaMuxer,
+The shared core already runs on two platforms (Android and the desktop JVM), so an iOS target mainly needs iOS
+`actual`s. Platform-specific pieces would need iOS counterparts: NewPipe Extractor (JVM-only), the download service, MediaMuxer,
 the Media3 player and the WebView. Note that Apple doesn't allow YouTube downloading on the App Store.

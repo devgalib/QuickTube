@@ -1,8 +1,10 @@
 plugins {
-    alias(libs.plugins.quicktube.android.library)
+    alias(libs.plugins.quicktube.kmp.library)
     alias(libs.plugins.kotlin.serialization)
 }
 
-dependencies {
-    implementation(libs.kotlinx.serialization.json)
+kotlin {
+    sourceSets.commonMain.dependencies {
+        implementation(libs.kotlinx.serialization.json)
+    }
 }

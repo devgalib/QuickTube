@@ -1,10 +1,15 @@
 plugins {
-    alias(libs.plugins.quicktube.android.library.compose)
+    alias(libs.plugins.quicktube.kmp.compose)
 }
 
-dependencies {
-    api(projects.core.model)
-    implementation(projects.core.common)
-    implementation(projects.core.designsystem)
-    implementation(libs.coil.compose)
+kotlin {
+    sourceSets.commonMain.dependencies {
+        api(projects.core.model)
+        implementation(projects.core.common)
+        implementation(projects.core.designsystem)
+        implementation(libs.coil.compose)
+    }
+    sourceSets.androidMain.dependencies {
+        implementation(libs.androidx.activity.compose)
+    }
 }

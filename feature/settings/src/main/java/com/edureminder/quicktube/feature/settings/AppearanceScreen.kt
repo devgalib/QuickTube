@@ -1,5 +1,6 @@
 package com.edureminder.quicktube.feature.settings
 
+import com.edureminder.quicktube.core.ui.readableWidth
 import android.os.Build
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
@@ -51,7 +52,7 @@ fun AppearanceScreen(onBack: () -> Unit) {
     val s by vm.settings.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize()) {
         QtTopBar("Appearance", onBack)
-        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
+        Column(Modifier.fillMaxSize().readableWidth().verticalScroll(rememberScrollState()).navigationBarsPadding().padding(bottom = 24.dp)) {
             GroupLabel("Theme")
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 listOf(ThemeMode.SYSTEM to "System", ThemeMode.LIGHT to "Light", ThemeMode.DARK to "Dark").forEach { (m, label) ->

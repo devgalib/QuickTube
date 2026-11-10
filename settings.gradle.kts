@@ -30,6 +30,7 @@ rootProject.name = "QuickTube"
 enableFeaturePreview("TYPESAFE_PROJECT_ACCESSORS")
 
 include(":app")
+include(":desktopApp")
 
 include(":core:model")
 include(":core:common")

@@ -1,5 +1,6 @@
 package com.edureminder.quicktube.feature.library
 
+import com.edureminder.quicktube.core.ui.readableWidth
 import com.edureminder.quicktube.core.designsystem.QtIconButton
 import com.edureminder.quicktube.core.designsystem.icon.QtIcons
 import androidx.compose.foundation.layout.Column
@@ -66,7 +67,7 @@ fun DownloadingScreen(onBack: () -> Unit) {
     }) { pad ->
         if (active.isEmpty()) EmptyBox("Nothing downloading", "Finished files are in the Play tab", Modifier.fillMaxSize().padding(pad))
         else LazyColumn(
-            Modifier.fillMaxSize().padding(pad),
+            Modifier.fillMaxSize().padding(pad).readableWidth(900.dp),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {

@@ -1,7 +1,9 @@
 plugins {
-    alias(libs.plugins.quicktube.android.feature)
+    alias(libs.plugins.quicktube.kmp.feature)
 }
 
-dependencies {
-    implementation(projects.core.download)
+kotlin {
+    sourceSets.commonMain.dependencies {
+        implementation(projects.core.download)
+    }
 }

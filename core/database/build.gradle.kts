@@ -1,8 +1,20 @@
 plugins {
-    alias(libs.plugins.quicktube.android.library)
-    alias(libs.plugins.quicktube.android.room)
+    alias(libs.plugins.quicktube.kmp.library)
+    alias(libs.plugins.ksp)
+}
+
+kotlin {
+    sourceSets.commonMain.dependencies {
+        api(projects.core.model)
+        implementation(projects.core.common)
+        api(libs.androidx.room.runtime)
+    }
+    sourceSets.desktopMain.dependencies {
+        implementation(libs.androidx.sqlite.bundled)
+    }
 }
 
 dependencies {
-    api(projects.core.model)
+    add("kspAndroid", libs.androidx.room.compiler)
+    add("kspDesktop", libs.androidx.room.compiler)
 }

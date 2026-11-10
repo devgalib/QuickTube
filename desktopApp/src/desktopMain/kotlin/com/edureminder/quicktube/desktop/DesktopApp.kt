@@ -239,7 +239,13 @@ private fun Shell(nav: NavHostController, widthClass: WidthClass) {
     }
     fun downloadUrl(raw: String) {
         val url = Urls.normalize(raw)
-        if (media.linkKind(url) == ItemKind.VIDEO) nav.navigate(VideoRoute(url))
+        val kind = media.linkKind(url)
+        // A site's home page or feed (instagram.com, a profile) has no one video to download.
+        if (kind == null && !Urls.namesOneMedia(url) && !Urls.isMediaFile(url)) {
+            toast.show("That's ${Urls.platformOf(url).title.takeIf { it != "Web" } ?: "a site"}'s page, not one video. Open the video or post, copy its link and paste it here", true)
+            return
+        }
+        if (kind == ItemKind.VIDEO) nav.navigate(VideoRoute(url))
         sheet.open(url)
     }
     fun openItem(item: MediaItem) = nav.navigate(

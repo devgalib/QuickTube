@@ -31,7 +31,7 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
 
       # "Our games" reads the app's Firebase Remote Config; without the secret the built-in list is shown.
       - name: Firebase settings

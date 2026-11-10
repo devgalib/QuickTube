@@ -74,7 +74,7 @@ jobs:
           for t in ${{ matrix.tasks }}; do tasks="$tasks :desktopApp:$t"; done
           ./gradlew $tasks -PappVersionName=${{ steps.version.outputs.name }} --no-configuration-cache
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: quicktube-desktop-${{ runner.os }}
           path: desktopApp/build/compose/binaries/main/*/*

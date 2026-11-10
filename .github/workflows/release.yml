@@ -90,6 +90,11 @@ jobs:
             if [ "$digest" != "$EXPECTED_CERT_SHA256" ]; then
               echo "$report"; echo "::error::$src is not signed with the QuickTube release key"; exit 1
             fi
+            # Some phones' installers (vivo…) refuse an APK without the v1 JAR signature: "missing the developer certificate".
+            # (apksigner skips v1 for minSdk 24+, so check as if for Android 6, like those installers do.)
+            if ! v1=$("$apksigner" verify --verbose --min-sdk-version 23 "$src" 2>&1) || ! echo "$v1" | grep -q "v1 scheme (JAR signing): true"; then
+              echo "$v1"; echo "::error::$src has no valid v1 (JAR) signature"; exit 1
+            fi
             if [ "$abi" = universal ]; then out="QuickTube-v${{ steps.version.outputs.name }}.apk"
             else out="QuickTube-v${{ steps.version.outputs.name }}-$abi.apk"; fi
             cp "$src" "dist/$out"

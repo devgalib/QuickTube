@@ -29,6 +29,10 @@ android {
                 storePassword = secret("RELEASE_KEYSTORE_PASSWORD")
                 keyAlias = secret("RELEASE_KEY_ALIAS")
                 keyPassword = secret("RELEASE_KEY_PASSWORD")
+                // v2 alone is enough for Android 7+, but some phones' own installers (vivo, others) read the old v1 JAR
+                // signature in META-INF and refuse the APK as "missing the developer certificate" without it.
+                enableV1Signing = true
+                enableV2Signing = true
             }
         }
     }

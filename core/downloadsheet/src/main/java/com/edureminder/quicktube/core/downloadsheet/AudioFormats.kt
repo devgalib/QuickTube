@@ -28,7 +28,7 @@ private val made = listOf(
  * formats". Each is downloaded like the site's audio it comes from, then converted on the phone. Nothing changes when
  * the site already offers MP3 or has no sound at all.
  */
-internal fun withMp3(options: List<DownloadOption>): List<DownloadOption> {
+internal fun withMp3(options: List<DownloadOption>, durationSec: Long = -1): List<DownloadOption> {
     val audio = options.filter { it.kind == FormatKind.AUDIO }
     if (audio.isEmpty() || audio.any { it.ext == "mp3" }) return options
     val native = audio.filter { !it.extractAudio }
@@ -36,7 +36,7 @@ internal fun withMp3(options: List<DownloadOption>): List<DownloadOption> {
     fun from(source: DownloadOption, m: Made, id: String) = source.copy(
         id = id, title = m.title, info = m.info, ext = m.ext, mimeType = m.mime, label = null,
         bitrate = when { m.kbps > 0 -> m.kbps; m.kbps == 0 -> 0; else -> source.bitrate },
-        sizeBytes = estimate(source, m.kbps, m.ext),
+        sizeBytes = if (durationSec > 0) bySeconds(durationSec.toDouble(), m.kbps, m.ext, source.sizeBytes) else estimate(source, m.kbps, m.ext),
     )
     val mp3 = from(best, Made("mp3", "audio/mpeg", "MP3 (${MP3_KBPS}K)", "Plays everywhere: cars, speakers, any phone", MP3_KBPS), "mp3-" + best.id)
     val extra = made.mapNotNull { m ->
@@ -52,11 +52,20 @@ internal fun withMp3(options: List<DownloadOption>): List<DownloadOption> {
     }
 }
 
+/** The made file's size from the video's length (exact for MP3 and WAV, about right for FLAC; AAC/Opus keep the source's). */
+private fun bySeconds(seconds: Double, kbps: Int, ext: String, sourceSize: Long): Long = when {
+    kbps > 0 -> (seconds * kbps * 1000 / 8).toLong()
+    kbps == 0 -> (seconds * 1411 * 1000 / 8 * if (ext == "flac") 0.6 else 1.0).toLong()
+    else -> sourceSize
+}
+
 /** The made file's size from the source's: by bitrate for MP3, about 1411K (CD audio) for WAV, ~60% of that for FLAC. */
 private fun estimate(source: DownloadOption, kbps: Int, ext: String): Long {
-    val size = source.sizeBytes
-    if (size <= 0) return size
-    val sourceKbps = source.bitrate.takeIf { it > 0 } ?: return -1
+    // Audio taken from a video (X, websites): the sheet shows about an eighth of the video's size for it.
+    val size = if (source.extractAudio) source.sizeBytes / 8 else source.sizeBytes
+    if (size <= 0) return source.sizeBytes
+    // Sites that don't say the bitrate serve about 128K AAC.
+    val sourceKbps = source.bitrate.takeIf { it > 0 } ?: 128
     val seconds = size * 8 / 1000.0 / sourceKbps
     return when {
         kbps > 0 -> (seconds * kbps * 1000 / 8).toLong()

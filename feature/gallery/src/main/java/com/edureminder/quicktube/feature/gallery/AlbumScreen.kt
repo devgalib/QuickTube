@@ -30,8 +30,14 @@ fun AlbumScreen(
     onOpenViewer: (GalleryMedia) -> Unit,
     /** Opens the player for a video or audio file. */
     onOpenVideo: (GalleryMedia) -> Unit,
+    /** An audio folder (from the Audios tab): its songs, with Play all / Shuffle / Add to queue. */
+    audio: Boolean = false,
+    /** Make a collage of these photos. */
+    onCollage: (List<GalleryMedia>) -> Unit = {},
 ) {
-    val vm = koinViewModel<GalleryViewModel>(key = "gallery-$bucketId") { parametersOf(bucketId) }
+    val vm = koinViewModel<GalleryViewModel>(key = "gallery-$bucketId-$audio") { parametersOf(bucketId, audio) }
+    val controller = org.koin.compose.koinInject<com.edureminder.quicktube.core.media.PlayerController>()
+    val context = androidx.compose.ui.platform.LocalContext.current
     val ui by vm.ui.collectAsStateWithLifecycle()
     var selection by remember { mutableStateOf<Set<Long>?>(null) }
     val state = rememberLazyGridState()
@@ -40,8 +46,23 @@ fun AlbumScreen(
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             GalleryToolbar(name, collapsed = true, selectionCount = selection?.size, onCloseSelection = { selection = null }, onBack = onBack)
-            val bottom = PaddingValues(bottom = if (selection != null) 96.dp else 0.dp)
-            if (bucketId == GALLERY_AUDIOS) AudioList(ui.items, selection, { selection = it }, onOpenVideo, bottom)
+            // Clear of the navigation bar, and of the selection bar while selecting.
+            val bottom = PaddingValues(bottom = com.edureminder.quicktube.core.designsystem.LocalBottomBarHeight.current + if (selection != null) SelectionBarSpace else 8.dp)
+            if (bucketId == GALLERY_AUDIOS || audio) AudioList(ui.items, selection, { selection = it }, onOpenVideo, bottom) {
+                // A folder's songs play in order from the one tapped; these play or queue all of them.
+                if (ui.items.isNotEmpty() && selection == null) item(key = "actions") {
+                    AudioActions(listOf(
+                        Triple("Play all", com.edureminder.quicktube.core.designsystem.icon.QtIcons.Play) { GalleryQueue.play(controller, ui.items)?.let(onOpenVideo) },
+                        Triple("Shuffle", com.edureminder.quicktube.core.designsystem.icon.QtIcons.Shuffle) { GalleryQueue.play(controller, ui.items.shuffled())?.let(onOpenVideo) },
+                        Triple("Add to queue", com.edureminder.quicktube.core.designsystem.icon.QtIcons.PlaylistAdd) {
+                            if (GalleryQueue.isPlayingGallery(controller)) {
+                                GalleryQueue.add(controller, ui.items)
+                                android.widget.Toast.makeText(context, "Added ${ui.items.size} to the queue", android.widget.Toast.LENGTH_SHORT).show()
+                            } else GalleryQueue.play(controller, ui.items)?.let(onOpenVideo)
+                        },
+                    ))
+                }
+            }
             else MediaGrid(
                 ui, state, selection, { selection = it },
                 onOpen = { if (it.isPhoto) onOpenViewer(it) else onOpenVideo(it) },
@@ -55,6 +76,8 @@ fun AlbumScreen(
                 onSelectAll = { selection = if (sel.size == ui.items.size) emptySet() else ui.items.mapTo(HashSet()) { it.id } },
                 onDone = { selection = null },
                 modifier = Modifier.align(Alignment.BottomCenter),
+                onOpenPlayer = onOpenVideo,
+                onCollage = onCollage,
             )
         }
     }

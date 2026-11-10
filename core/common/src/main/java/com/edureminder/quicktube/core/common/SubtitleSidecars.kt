@@ -21,6 +21,12 @@ object SubtitleSidecars {
         return name.takeIf { it.isNotBlank() && it != tag }?.replaceFirstChar { it.titlecase(Locale.getDefault()) } ?: tag
     }
 
+    /** The caption file to show first: the phone's language, then English, then the first one. */
+    fun preferred(video: File, files: List<File>, phoneLanguage: String = Locale.getDefault().language): File? {
+        fun tag(f: File) = f.nameWithoutExtension.removePrefix(video.nameWithoutExtension).removePrefix(".").substringBefore('-').lowercase()
+        return files.firstOrNull { tag(it) == phoneLanguage.lowercase() } ?: files.firstOrNull { tag(it) == "en" } ?: files.firstOrNull()
+    }
+
     /** MIME type for the player. */
     fun mimeOf(file: File) = if (file.extension.equals("vtt", true)) "text/vtt" else "application/x-subrip"
 }

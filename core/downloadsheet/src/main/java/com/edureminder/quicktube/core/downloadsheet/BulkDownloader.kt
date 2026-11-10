@@ -111,6 +111,12 @@ class BulkDownloader(
                 return
             }
             dao.updateItem(item.copy(status = status.name, message = message, title = title))
+            analytics.event(Events.DOWNLOAD_FAILED, mapOf(
+                "stage" to "find", "source" to "bulk",
+                "reason" to com.edureminder.quicktube.core.common.DownloadStats.findReason(found.error),
+                "site" to (com.edureminder.quicktube.core.common.DownloadStats.site(item.link) ?: "unknown"),
+                "platform" to Urls.platformOf(item.link).name.lowercase(),
+            ))
             return
         }
         val quality = runCatching { BatchQuality.valueOf(job.quality) }.getOrDefault(BatchQuality.P720)

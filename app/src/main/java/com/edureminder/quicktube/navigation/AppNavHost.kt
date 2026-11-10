@@ -12,6 +12,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -158,13 +160,17 @@ fun AppNavHost(nav: NavHostController) {
     }
     val density = LocalDensity.current
     var overlayHeight by remember { mutableStateOf(0.dp) }
+    // The phone's own navigation bar (gesture pill or buttons), which content must also clear.
+    val navBar = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     // Surface (not a plain Box) so screens get the theme's content colour, like Scaffold provided before.
     androidx.compose.material3.Surface(color = MaterialTheme.colorScheme.background, contentColor = MaterialTheme.colorScheme.onBackground) {
     Box(Modifier.fillMaxSize()) {
         // Tab screens draw behind the floating bar (and see their content through the gaps around it);
         // other screens simply stop above the mini player.
         CompositionLocalProvider(
-            LocalBottomBarHeight provides if (onTab) overlayHeight else 0.dp, LocalBottomBarHidden provides barHidden,
+            // Tab screens: the floating bar, or at least the navigation bar when it's hidden. Other screens: the
+            // navigation bar, unless the mini player's space below already covers it.
+            LocalBottomBarHeight provides if (onTab) maxOf(overlayHeight, navBar) else if (overlayHeight > 0.dp) 0.dp else navBar, LocalBottomBarHidden provides barHidden,
             // Red "watched" bars on YouTube thumbnails everywhere, from the watch history.
             com.edureminder.quicktube.core.ui.LocalWatchProgress provides watchProgress,
         ) {
@@ -211,6 +217,7 @@ fun AppNavHost(nav: NavHostController) {
                         openVault = { nav.navigate(VaultRoute) },
                         openGames = { nav.navigate(GamesRoute) },
                         openBulk = { nav.navigate(BulkRoute()) },
+                        openSubscriptions = { nav.navigate(SubscriptionsRoute) },
                         openPlaylists = { music -> nav.navigate(LocalPlaylistsRoute(music)) },
                         openLocalPlaylist = { id -> nav.navigate(LocalPlaylistRoute(id)) },
                     ),
@@ -237,6 +244,9 @@ fun AppNavHost(nav: NavHostController) {
                     onOpenAlbum = { nav.navigate(GalleryAlbumRoute(it.bucketId, it.name)) },
                     onOpenViewer = { nav.navigate(GalleryViewerRoute(it.id)) },
                     onOpenVideo = { GalleryPlayerActivity.start(context, it.id) },
+                    onOpenAudioFolder = { nav.navigate(GalleryAlbumRoute(it.bucketId, it.name, audio = true)) },
+                    onPickAudios = { add -> nav.navigate(GalleryAudioPickRoute(add)) },
+                    onCollage = { nav.navigate(GalleryCollageRoute(it.joinToString(",") { m -> m.id.toString() })) },
                 )
             }
             composable<GalleryAlbumRoute> { e ->
@@ -245,6 +255,14 @@ fun AppNavHost(nav: NavHostController) {
                     r.bucketId, r.name, onBack = nav::popBackStack,
                     onOpenViewer = { nav.navigate(GalleryViewerRoute(it.id, r.bucketId)) },
                     onOpenVideo = { GalleryPlayerActivity.start(context, it.id) },
+                    audio = r.audio,
+                    onCollage = { nav.navigate(GalleryCollageRoute(it.joinToString(",") { m -> m.id.toString() })) },
+                )
+            }
+            composable<GalleryAudioPickRoute> { e ->
+                com.edureminder.quicktube.feature.gallery.AudioPickerScreen(
+                    e.toRoute<GalleryAudioPickRoute>().add, onBack = nav::popBackStack,
+                    onOpenPlayer = { nav.popBackStack(); GalleryPlayerActivity.start(context, it.id) },
                 )
             }
             composable<GalleryViewerRoute>(
@@ -257,7 +275,15 @@ fun AppNavHost(nav: NavHostController) {
                 ViewerScreen(r.mediaId, r.bucketId, onBack = nav::popBackStack, onOpenVideo = { GalleryPlayerActivity.start(context, it.id) },
                     onEditPhoto = { nav.navigate(PhotoEditorRoute(it.id)) })
             }
-            composable<PhotoEditorRoute> { e -> PhotoEditorScreen(e.toRoute<PhotoEditorRoute>().mediaId, onBack = nav::popBackStack) }
+            composable<PhotoEditorRoute> { e ->
+                val id = e.toRoute<PhotoEditorRoute>().mediaId
+                PhotoEditorScreen(id, onBack = nav::popBackStack, onCollage = { nav.navigate(GalleryCollageRoute("$id")) })
+            }
+            composable<GalleryCollageRoute> { e ->
+                com.edureminder.quicktube.feature.gallery.editor.CollageScreen(
+                    e.toRoute<GalleryCollageRoute>().ids.split(',').mapNotNull { it.trim().toLongOrNull() }, onBack = nav::popBackStack,
+                )
+            }
             composable<SettingsRoute>(
                 enterTransition = QtTransitions.tabEnter, exitTransition = QtTransitions.tabExit,
                 popEnterTransition = QtTransitions.tabEnter, popExitTransition = QtTransitions.tabExit,
@@ -316,6 +342,9 @@ fun AppNavHost(nav: NavHostController) {
                     onChannel = { nav.navigate(ChannelRoute(it)) },
                     onPip = { FloatingPlayerActivity.start(context) },
                     onPlayNext = { item -> nav.navigate(VideoRoute(item.url, item.title.ifBlank { null }, item.thumbnail)) { popUpTo<VideoRoute> { inclusive = true } } })
+            }
+            composable<SubscriptionsRoute> {
+                com.edureminder.quicktube.feature.video.SubscriptionsScreen(nav::popBackStack, onOpen = ::openItem, onChannel = { nav.navigate(ChannelRoute(it)) })
             }
             composable<SavedVideosRoute> { SavedVideosScreen(nav::popBackStack, onOpen = ::openItem) }
             composable<com.edureminder.quicktube.core.navigation.WatchHistoryRoute> {

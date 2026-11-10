@@ -60,6 +60,7 @@ import com.edureminder.quicktube.core.ui.LoadingBox
 import com.edureminder.quicktube.core.ui.Thumbnail
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
+import kotlinx.coroutines.flow.map
 import org.koin.compose.viewmodel.koinViewModel
 
 /** Place once near the root; shows the format picker whenever [DownloadSheetController.open] is called. */
@@ -122,6 +123,17 @@ fun DownloadSheetHost(
         controller.dismiss()
         onDownloadStarted()
     }
+    var later by remember(t) { mutableStateOf<DownloadOption?>(null) }
+    later?.let { o ->
+        DownloadLaterDialog(onDismiss = { later = null }) { startAfter, wifiOnly ->
+            later = null
+            if (!Permissions.granted(context, Permissions.storageWrite)) { pending = o; storageLauncher.launch(Permissions.storageWrite); return@DownloadLaterDialog }
+            vm.download(o, cut, startAfter, wifiOnly)
+            Toast.makeText(context, if (wifiOnly && startAfter == 0L) "Will download on Wi-Fi" else "Scheduled for " + clockTime(startAfter), Toast.LENGTH_SHORT).show()
+            controller.dismiss()
+            onDownloadStarted()
+        }
+    }
     // Same video in the same quality already saved (or still downloading): ask before downloading it again.
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     var duplicate by remember(t) { mutableStateOf<Pair<com.edureminder.quicktube.core.model.DownloadTask, DownloadOption>?>(null) }
@@ -144,10 +156,12 @@ fun DownloadSheetHost(
     // A sensible choice is ready: ~720p video (or the best below it), else the first format.
     var selectedId by remember(t) { mutableStateOf<String?>(null) }
     // Formats of one video get an MP3 choice too (a post's photos and videos don't).
-    val options = remember(ui.options, ui.items) { if (ui.items) ui.options else withMp3(ui.options) }
+    val options = remember(ui.options, ui.items, ui.durationSec) { if (ui.items) ui.options else withMp3(ui.options, ui.durationSec) }
     val cuttableOptions = options.filter { it.protocol == com.edureminder.quicktube.core.model.StreamProtocol.HTTP && !it.extractAudio && it.ext != "mp3" }
     val choices = if (cut != null) cuttableOptions else options
-    val selected = choices.firstOrNull { it.id == selectedId } ?: defaultChoice(choices)
+    val prefs = koinInject<com.edureminder.quicktube.core.data.SettingsRepository>()
+    val preferred by remember(prefs) { prefs.settings.map { it.defaultQuality } }.collectAsStateWithLifecycle("ASK")
+    val selected = choices.firstOrNull { it.id == selectedId } ?: defaultChoice(choices, preferred)
     // A post's photos and videos: all of them ticked to start with.
     var picked by remember(t, ui.options) { mutableStateOf(ui.options.map { it.id }.toSet()) }
     val downloadPicked = start@{
@@ -243,26 +257,47 @@ fun DownloadSheetHost(
                 val size = selected.shownSize()
                 val c = cut
                 val shown = if (c != null && durationMs > 0 && size > 0) (size * ((c.last - c.first).toDouble() / durationMs)).toLong() else size
-                PillButton(
-                    // The cut's times are in the panel above; the button only says it's a cut.
-                    (if (c != null) "Download cut · " else "Download · ") + shortName(selected) +
-                        (if (shown > 0) " · " + (if (c != null) "~" else "") + Format.bytes(shown) else ""),
-                    { startDownload(selected) },
-                    Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 10.dp),
-                    icon = QtIcons.Download,
-                )
+                Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp).padding(top = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                    PillButton(
+                        // The cut's times are in the panel above; the button only says it's a cut.
+                        (if (c != null) "Download cut · " else "Download · ") + shortName(selected) +
+                            (if (shown > 0) " · " + (if (c != null) "~" else "") + Format.bytes(shown) else ""),
+                        { startDownload(selected) },
+                        Modifier.weight(1f),
+                        icon = QtIcons.Download,
+                    )
+                    // "Download later": on Wi-Fi, tonight, or at a chosen time.
+                    QtIconButton(QtIcons.Schedule, "Download later", { later = selected }, Modifier.padding(start = 8.dp),
+                        container = MaterialTheme.colorScheme.surfaceContainerHigh)
+                }
             }
         }
     }
 }
 
 /** ~720p video, or the best below it; audio only when the page has no video. */
-private fun defaultChoice(all: List<DownloadOption>): DownloadOption? {
+/**
+ * The format the sheet starts on, from Settings → Download → Default quality: "ASK" / "P720" is about 720p, "P360" and
+ * "P1080" the nearest to those, "BEST" the largest video, "AUDIO" the best audio and "MP3" the MP3.
+ */
+internal fun defaultChoice(all: List<DownloadOption>, preference: String = "ASK"): DownloadOption? {
     val video = ordered(all).filter { it.kind == FormatKind.VIDEO }
-    return video.lastOrNull { it.height in 1..720 } ?: video.getOrNull(video.size / 2) ?: all.firstOrNull()
+    fun near(h: Int) = video.lastOrNull { it.height in 1..h } ?: video.firstOrNull { it.height > h }
+    val audio = all.filter { it.kind == FormatKind.AUDIO }
+    val picked = when (preference) {
+        "P360" -> near(360)
+        "P1080" -> near(1080)
+        "BEST" -> video.maxByOrNull { it.height }
+        "AUDIO" -> audio.firstOrNull { it.ext != "mp3" }
+        "MP3" -> audio.firstOrNull { it.ext == "mp3" }
+        else -> null
+    }
+    return picked ?: video.lastOrNull { it.height in 1..720 } ?: video.getOrNull(video.size / 2) ?: all.firstOrNull()
 }
 
-private fun DownloadOption.shownSize(): Long = if (extractAudio && totalSize > 0) totalSize / 8 else totalSize
+/** "Audio only" from a video shows about an eighth of the video's size; formats made from it carry their own estimate. */
+private fun DownloadOption.shownSize(): Long =
+    if (extractAudio && totalSize > 0 && ext !in setOf("mp3", "flac", "wav", "aac", "opus")) totalSize / 8 else totalSize
 
 /** "720p", "HD", "M4A" — what the Download button says. */
 private fun shortName(o: DownloadOption): String = when {
@@ -565,4 +600,53 @@ private fun TimeField(label: String, ms: Long, modifier: Modifier, onSet: (Long)
             if (!f.isFocused) text = clipTime(ms)
         },
     )
+}
+
+private fun clockTime(at: Long) = java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(at))
+
+/** "Download later": when on Wi-Fi, in an hour, tonight at 1:00, or at a time picked on a clock. */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
+@Composable
+private fun DownloadLaterDialog(onDismiss: () -> Unit, onPick: (startAfter: Long, wifiOnly: Boolean) -> Unit) {
+    var picking by remember { mutableStateOf(false) }
+    var wifi by remember { mutableStateOf(false) }
+    if (picking) {
+        val now = java.util.Calendar.getInstance()
+        val state = androidx.compose.material3.rememberTimePickerState(now.get(java.util.Calendar.HOUR_OF_DAY), now.get(java.util.Calendar.MINUTE))
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = onDismiss,
+            title = { Text("Start at") },
+            text = { androidx.compose.material3.TimePicker(state) },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = { onPick(com.edureminder.quicktube.core.model.DownloadLater.at(state.hour, state.minute), wifi) }) { Text("Schedule") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
+        )
+        return
+    }
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Download later") },
+        text = {
+            Column {
+                LaterRow("When on Wi-Fi", "Saves mobile data") { onPick(0, true) }
+                LaterRow("In 1 hour", null) { onPick(System.currentTimeMillis() + 3_600_000L, wifi) }
+                LaterRow("Tonight at " + clockTime(com.edureminder.quicktube.core.model.DownloadLater.tonight()), "While you sleep") {
+                    onPick(com.edureminder.quicktube.core.model.DownloadLater.tonight(), wifi)
+                }
+                LaterRow("Pick a time…", null) { picking = true }
+                Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Only on Wi-Fi", modifier = Modifier.weight(1f))
+                    androidx.compose.material3.Switch(wifi, { wifi = it })
+                }
+            }
+        },
+        confirmButton = { androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun LaterRow(title: String, hint: String?, onClick: () -> Unit) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).pressable(scaleDown = 0.98f, onClick = onClick).padding(vertical = 10.dp, horizontal = 4.dp)) {
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        if (hint != null) Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
 }

@@ -38,6 +38,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import com.edureminder.quicktube.core.designsystem.QtChip
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.aspectRatio
@@ -107,6 +108,7 @@ class HomeActions(
     /** All our games (See all on the games row). */
     val openGames: () -> Unit = {},
     val openBulk: () -> Unit = {},
+    val openSubscriptions: () -> Unit = {},
     val openPlaylists: (music: Boolean) -> Unit = {},
     val openLocalPlaylist: (Long) -> Unit = {},
 )
@@ -139,7 +141,7 @@ fun HomeScreen(actions: HomeActions, modifier: Modifier = Modifier) {
         HorizontalPager(pager, Modifier.fillMaxSize(), beyondViewportPageCount = 0) { page ->
             when (page) {
                 0 -> DiscoverTab(vm, actions, onDownload = sheet::open, onSeeTrending = { scope.launch { pager.animateScrollToPage(1) } }, onSeeMusic = { scope.launch { pager.animateScrollToPage(2) } })
-                1 -> YouTubeTab(actions, onDownload = sheet::open) { FeedTab(vm, actions, onDownload = sheet::open) }
+                1 -> YouTubeTab(actions, onDownload = sheet::open, feedChips = { FeedChips(vm) }) { top -> FeedList(vm, actions, onDownload = sheet::open, top = top) }
                 2 -> MusicHome(actions, onDownload = sheet::open)
                 else -> MoreTab(actions)
             }
@@ -198,7 +200,6 @@ private fun DiscoverTab(
     val ex = LocalQtExtras.current
     val sheet = koinInject<DownloadSheetController>()
     val feed by vm.feed.collectAsStateWithLifecycle()
-    val recent by vm.recent.collectAsStateWithLifecycle()
     val games by vm.games.collectAsStateWithLifecycle()
     val showTrending by vm.showTrending.collectAsStateWithLifecycle()
     androidx.lifecycle.compose.LifecycleResumeEffect(Unit) { vm.refreshGames(); onPauseOrDispose { } }
@@ -206,7 +207,8 @@ private fun DiscoverTab(
     // Android 10+ only lets an app read the clipboard while its window has focus, which comes after
     // ON_RESUME, so read it whenever focus arrives (coming back from another app included).
     val focused = androidx.compose.ui.platform.LocalWindowInfo.current.isWindowFocused
-    LaunchedEffect(focused) { if (focused) clip = readClipboardUrl(context) }
+    // Only links QuickTube can download are offered (a copied GitHub or news link isn't).
+    LaunchedEffect(focused) { if (focused) clip = readClipboardUrl(context)?.takeIf(vm::canDownload) }
     val list = rememberLazyListState()
 
     Box(Modifier.fillMaxSize()) {
@@ -297,30 +299,13 @@ private fun DiscoverTab(
                 }
             }
             if (showTrending && (feed.items.isNotEmpty() || feed.loading)) item(key = "trending") {
-                DiscoverHeader("Trending now", QtIcons.TrendingUp, onSeeTrending)
+                DiscoverHeader("Recommended for you", QtIcons.TrendingUp, onSeeTrending)
                 TrendingCarousel(feed.items.take(12), loading = feed.items.isEmpty(), onOpen = actions.openItem, onDownload = onDownload)
             }
             // Our own games where the music row was (Remote Config; see docs/PROMO_GAMES.md).
             if (games.games.isNotEmpty()) item(key = "games") {
                 DiscoverHeader(games.title, QtIcons.Apps, actions.openGames)
                 GamesRow(games.games)
-            }
-            if (recent.isNotEmpty()) item(key = "recent") {
-                DiscoverHeader("Your recent downloads", QtIcons.DownloadDone, actions.openLibrary)
-                LazyRow(contentPadding = PaddingValues(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(recent, key = { it.id }) { t ->
-                        Column(Modifier.width(150.dp).pressable(scaleDown = 0.96f, onClick = actions.openLibrary)) {
-                            Box(Modifier.fillMaxWidth().aspectRatio(16f / 10f).clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh),
-                                contentAlignment = Alignment.Center) {
-                                Icon(if (t.type == com.edureminder.quicktube.core.model.ContentType.AUDIO) QtIcons.MusicNote else QtIcons.PlayCircle, null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                val model: Any? = t.thumbnail ?: java.io.File(t.filePath).takeIf { it.exists() && t.type == com.edureminder.quicktube.core.model.ContentType.VIDEO }
-                                if (model != null) coil3.compose.AsyncImage(model, null, contentScale = androidx.compose.ui.layout.ContentScale.Crop, modifier = Modifier.fillMaxSize())
-                            }
-                            Text(t.title, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(top = 8.dp))
-                        }
-                    }
-                }
             }
             item(key = "features") {
                 DiscoverHeader("Do more with QuickTube", QtIcons.Bolt, null)
@@ -475,15 +460,37 @@ private fun readClipboardUrl(context: Context): String? = runCatching {
 }.getOrNull()
 
 @Composable
-private fun FeedTab(vm: HomeViewModel, actions: HomeActions, onDownload: (MediaItem) -> Unit) {
+private fun FeedChips(vm: HomeViewModel) {
+    val category by vm.category.collectAsStateWithLifecycle()
+    // "For you" (made from what was watched here) or one subject, like YouTube's chips.
+    LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(com.edureminder.quicktube.core.data.FeedCategory.entries, key = { it.name }) { c ->
+            QtChip(c.label, c == category, { vm.selectCategory(c) })
+        }
+    }
+}
+
+/** The feed under the YouTube tab's header, which covers its top [top]. */
+@Composable
+private fun FeedList(vm: HomeViewModel, actions: HomeActions, onDownload: (MediaItem) -> Unit, top: androidx.compose.ui.unit.Dp) {
     val ui by vm.feed.collectAsStateWithLifecycle()
     when {
-        ui.loading && ui.items.isEmpty() -> FeedSkeleton()
-        ui.error != null && ui.items.isEmpty() -> ErrorBox(ui.error!!, { vm.loadFeed(false) })
-        else -> PullToRefreshBox(ui.refreshing, onRefresh = { vm.loadFeed(true) }, Modifier.fillMaxSize()) {
+        ui.loading && ui.items.isEmpty() -> Box(Modifier.padding(top = top)) { FeedSkeleton() }
+        ui.error != null && ui.items.isEmpty() -> ErrorBox(ui.error!!, { vm.loadFeed(false) }, Modifier.fillMaxSize().padding(top = top))
+        else -> {
+            val pull = androidx.compose.material3.pulltorefresh.rememberPullToRefreshState()
+            PullToRefreshBox(
+                ui.refreshing, onRefresh = { vm.loadFeed(true) }, Modifier.fillMaxSize(), state = pull,
+                // The spinner comes down below the header, not under it.
+                indicator = {
+                    androidx.compose.material3.pulltorefresh.PullToRefreshDefaults.Indicator(
+                        pull, ui.refreshing, Modifier.align(Alignment.TopCenter).padding(top = top),
+                    )
+                },
+            ) {
             val state = rememberLazyListState()
             state.OnNearEnd { vm.loadMoreFeed() }
-            LazyColumn(state = state, contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp + LocalBottomBarHeight.current)) {
+            LazyColumn(state = state, contentPadding = PaddingValues(top = top + 10.dp, bottom = 24.dp + LocalBottomBarHeight.current)) {
                 items(ui.items, key = { it.url }) { item ->
                     Box(Modifier.animateItem()) { VideoFeedCard(
                         item,
@@ -493,6 +500,7 @@ private fun FeedTab(vm: HomeViewModel, actions: HomeActions, onDownload: (MediaI
                     ) }
                 }
                 if (ui.loadingMore) item { FooterLoading() }
+            }
             }
         }
     }

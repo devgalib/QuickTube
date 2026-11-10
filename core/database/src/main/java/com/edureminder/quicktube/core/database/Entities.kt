@@ -44,6 +44,10 @@ data class DownloadEntity(
     @ColumnInfo(defaultValue = "0") val clipEndMs: Long = 0,
     /** A photo post with music made into a video: its pictures (JSON array of URLs); [url] is then the music. */
     val slideImages: String? = null,
+    /** "Download later": not started before this time (epoch ms); 0 = as soon as possible. */
+    @ColumnInfo(defaultValue = "0") val startAfter: Long = 0,
+    /** Waits for Wi-Fi even when downloads may use mobile data. */
+    @ColumnInfo(defaultValue = "0") val wifiOnly: Boolean = false,
 )
 
 /** A bulk download: many links saved into one folder. */
@@ -100,14 +104,14 @@ fun DownloadEntity.asModel() = DownloadTask(
     id, title, pageUrl, sourceHost, thumbnail, url, audioUrl, filePath, mimeType, type, quality,
     totalBytes, downloadedBytes, audioTotalBytes, audioDownloadedBytes, status, error, durationSec,
     createdAt, completedAt, inVault, deletedAt, lastPlayedPositionMs, protocol = protocol,
-    clipStartMs = clipStartMs, clipEndMs = clipEndMs,
+    clipStartMs = clipStartMs, clipEndMs = clipEndMs, startAfter = startAfter, wifiOnly = wifiOnly,
 )
 
 fun DownloadTask.asEntity(headers: String? = null) = DownloadEntity(
     id, title, pageUrl, sourceHost, thumbnail, url, audioUrl, filePath, mimeType, type, quality,
     totalBytes, downloadedBytes, audioTotalBytes, audioDownloadedBytes, status, error, durationSec,
     createdAt, completedAt, inVault, deletedAt, lastPlayedPositionMs, headers, protocol,
-    clipStartMs = clipStartMs, clipEndMs = clipEndMs,
+    clipStartMs = clipStartMs, clipEndMs = clipEndMs, startAfter = startAfter, wifiOnly = wifiOnly,
 )
 
 @Entity(tableName = "sites")
@@ -192,3 +196,13 @@ data class SavedVideoEntity(
 
 fun SavedVideoEntity.asModel() = com.edureminder.quicktube.core.model.SavedVideo(url, title, thumbnail, uploader, durationSec, savedAt)
 fun com.edureminder.quicktube.core.model.SavedVideo.asEntity() = SavedVideoEntity(url, title, thumbnail, uploader, durationSec, savedAt)
+
+/** A followed channel; [lastVideo] is the newest upload already seen (for "new video" alerts). */
+@Entity(tableName = "subscriptions")
+data class SubscriptionEntity(
+    @PrimaryKey val url: String,
+    val name: String,
+    val avatar: String?,
+    val subscribedAt: Long,
+    val lastVideo: String? = null,
+)

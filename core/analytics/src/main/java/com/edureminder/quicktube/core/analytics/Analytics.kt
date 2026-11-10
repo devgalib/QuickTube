@@ -17,6 +17,10 @@ interface Analytics {
 object Events {
     const val DOWNLOAD_STARTED = "download_started"
     const val DOWNLOAD_COMPLETED = "download_completed"
+    /**
+     * A download that failed: [stage] "find" (the link gave no video) or "download" (saving it failed), with the site's
+     * domain, platform, country and a short reason code. Never logged as a crash.
+     */
     const val DOWNLOAD_FAILED = "download_failed"
     const val SHARE_TO_DOWNLOAD = "share_to_download"
     const val SEARCH = "search"

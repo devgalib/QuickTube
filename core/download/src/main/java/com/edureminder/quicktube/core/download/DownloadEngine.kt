@@ -3,6 +3,7 @@ package com.edureminder.quicktube.core.download
 import android.content.Context
 import android.media.MediaScannerConnection
 import com.edureminder.quicktube.core.common.Branding
+import com.edureminder.quicktube.core.model.DownloadLater
 import com.edureminder.quicktube.core.common.Urls
 import com.edureminder.quicktube.core.data.MediaRepository
 import com.edureminder.quicktube.core.data.SettingsRepository
@@ -203,6 +204,8 @@ internal class DownloadEngine(
                 clipStartMs = request.clipStartMs,
                 clipEndMs = request.clipEndMs,
                 slideImages = request.images.takeIf { it.isNotEmpty() }?.let { l -> kotlinx.serialization.json.JsonArray(l.map { JsonPrimitive(it) }).toString() },
+                startAfter = request.startAfter,
+                wifiOnly = request.wifiOnly,
             ),
         )
         reschedule()
@@ -272,6 +275,8 @@ internal class DownloadEngine(
                     val max = if (net == NetworkType.WIFI) s.maxTasksWifi else s.maxTasksMobile
                     var slots = max - active.count { jobs.containsKey(it.id) }
                     for (task in queued) {
+                        // "Download later": not yet (its time, or Wi-Fi); a job wakes the app when it's due.
+                        if (DownloadLater.waiting(task.startAfter, task.wifiOnly, net == NetworkType.WIFI)) continue
                         if (slots <= 0) {
                             if (task.status == DownloadStatus.WAITING_NETWORK) dao.updateStatus(task.id, DownloadStatus.QUEUED)
                             continue
@@ -282,10 +287,25 @@ internal class DownloadEngine(
                         jobs[task.id] = scope.launch { runTask(task.id) }
                     }
                 }
-                notifier.refresh(hasWork = jobs.isNotEmpty() || queued.isNotEmpty() && !blocked)
+                val due = queued.filter { !DownloadLater.waiting(it.startAfter, it.wifiOnly, net == NetworkType.WIFI) }
+                notifier.refresh(hasWork = jobs.isNotEmpty() || due.isNotEmpty() && !blocked)
+                // Wake up for the next scheduled one even if the app is closed by then.
+                val later = queued.filter { DownloadLater.waiting(it.startAfter, it.wifiOnly, net == NetworkType.WIFI) }
+                DownloadLaterJob.schedule(context, later.minOfOrNull { it.startAfter }?.takeIf { it > 0 }, later.any { it.wifiOnly })
+                if (later.any { it.startAfter > System.currentTimeMillis() }) {
+                    // While the app runs, a timer covers it too (jobs may run a little late).
+                    val wait = later.filter { it.startAfter > 0 }.minOf { it.startAfter } - System.currentTimeMillis()
+                    laterTimer?.cancel()
+                    laterTimer = scope.launch { kotlinx.coroutines.delay(wait.coerceAtLeast(1000)); reschedule() }
+                }
             }
         }
     }
+
+    private var laterTimer: kotlinx.coroutines.Job? = null
+
+    /** Something is downloading or being processed right now. */
+    fun busy() = jobs.isNotEmpty()
 
     private suspend fun runTask(id: Long) {
         var entity = dao.get(id) ?: return
@@ -328,7 +348,7 @@ internal class DownloadEngine(
             // Videos and photos carry QuickTube's description, site and tags too (songs got them with their cover above).
             if (cover == null) withContext(Dispatchers.IO) { brand(saved, entity.title) }
             // YouTube videos get their captions beside them ("Title(720p).en.srt"), which any player can show. Not for cuts.
-            if (!entity.extractAudio && saved.extension in setOf("mp4", "webm", "mkv") && entity.clipEndMs <= entity.clipStartMs) {
+            if (!entity.extractAudio && saved.extension in setOf("mp4", "webm", "mkv") && entity.clipEndMs <= entity.clipStartMs && settings.current().saveSubtitles) {
                 entity.pageUrl?.takeIf { Urls.youtubeVideoId(it) != null }?.let { page -> withContext(Dispatchers.IO) { saveCaptions(page, saved) } }
             }
             // The saved file's own length: the page's figure can belong to another video (and then hides a wrong file).
@@ -347,8 +367,13 @@ internal class DownloadEngine(
             deleteParts(entity)
             MediaScannerConnection.scanFile(context, arrayOf(saved.absolutePath), arrayOf(done.mimeType), null)
             notifier.completed(done.asModel())
-            analytics.event(com.edureminder.quicktube.core.analytics.Events.DOWNLOAD_COMPLETED,
-                mapOf("kind" to done.type.name.lowercase(), "protocol" to done.protocol.name.lowercase()))
+            // Which sites people download from most, by country (the site's domain only, never the address or title).
+            analytics.event(com.edureminder.quicktube.core.analytics.Events.DOWNLOAD_COMPLETED, mapOf(
+                "kind" to done.type.name.lowercase(), "protocol" to done.protocol.name.lowercase(),
+                "site" to (com.edureminder.quicktube.core.common.DownloadStats.site(done.pageUrl ?: done.url) ?: "unknown"),
+                "platform" to com.edureminder.quicktube.core.common.Urls.platformOf(done.pageUrl ?: done.url).name.lowercase(),
+                "country" to com.edureminder.quicktube.core.analytics.DeviceCountry.code(context),
+            ))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Throwable) {
@@ -358,9 +383,15 @@ internal class DownloadEngine(
             dao.updateStatus(id, status, friendlyError(e))
             if (status == DownloadStatus.FAILED) {
                 dao.get(id)?.let { notifier.failed(it) }
-                // Only the error type, never the message (it can contain URLs).
-                analytics.event(com.edureminder.quicktube.core.analytics.Events.DOWNLOAD_FAILED,
-                    mapOf("error" to (if (e is HttpStatusException) "http_${e.code}" else e.javaClass.simpleName)))
+                // A short reason code, never the message (it can contain URLs); an event, not a crash report.
+                val failed = dao.get(id)
+                analytics.event(com.edureminder.quicktube.core.analytics.Events.DOWNLOAD_FAILED, mapOf(
+                    "stage" to "download",
+                    "reason" to (if (e is HttpStatusException) "http_${e.code}" else com.edureminder.quicktube.core.common.DownloadStats.reason(e)),
+                    "site" to (com.edureminder.quicktube.core.common.DownloadStats.site(failed?.pageUrl ?: failed?.url) ?: "unknown"),
+                    "platform" to com.edureminder.quicktube.core.common.Urls.platformOf(failed?.pageUrl ?: failed?.url).name.lowercase(),
+                    "country" to com.edureminder.quicktube.core.analytics.DeviceCountry.code(context),
+                ))
             }
         } finally {
             jobs.remove(id)
@@ -486,10 +517,13 @@ internal class DownloadEngine(
     /** The best caption track of a YouTube video as SubRip next to [video]; nothing when it has none. Never fails the download. */
     private suspend fun saveCaptions(page: String, video: File) {
         runCatching {
-            val track = SubtitleFiles.pick(media.details(page).subtitles, java.util.Locale.getDefault().language) ?: return
-            val vtt = http.newCall(okhttp3.Request.Builder().url(track.url).build()).execute().use { r -> if (r.isSuccessful) r.body.string() else null } ?: return
-            val srt = SubtitleFiles.vttToSrt(vtt).takeIf { it.isNotBlank() } ?: return
-            File(video.parentFile, SubtitleFiles.nameFor(video.name, track.language)).writeText(srt)
+            val tracks = SubtitleFiles.pickAll(media.details(page).subtitles, java.util.Locale.getDefault().language)
+            for (track in tracks) runCatching {
+                val vtt = http.newCall(okhttp3.Request.Builder().url(track.url).build()).execute().use { r -> if (r.isSuccessful) r.body.string() else null }
+                    ?: return@runCatching
+                val srt = SubtitleFiles.vttToSrt(vtt).takeIf { it.isNotBlank() } ?: return@runCatching
+                File(video.parentFile, SubtitleFiles.nameFor(video.name, track.language)).writeText(srt)
+            }.onFailure { android.util.Log.w(TAG, "Caption ${track.language} not saved: $it") }
         }.onFailure { android.util.Log.w(TAG, "Captions not saved: $it") }
     }
 
@@ -611,15 +645,7 @@ internal class DownloadEngine(
     }
 
     /** Removes every partial and intermediate file of a task, wherever it was downloading. */
-    private fun deleteParts(e: DownloadEntity) {
-        for (p in listOf("${e.filePath}.part", "${e.filePath}.audio.part")) {
-            File(p).delete()
-            File("$p.idx").delete()
-            ChunkState.stateFile(File(p)).delete()
-            InPlaceMp4Merge.marker(File(p)).delete()
-        }
-        partsDir().listFiles { f -> f.name.startsWith("task-${e.id}.") }?.forEach { it.delete() }
-    }
+    private fun deleteParts(e: DownloadEntity) = com.edureminder.quicktube.core.common.PartFiles.delete(e.filePath, e.id, partsDir())
 
     private fun probeDurationSec(file: File): Long = runCatching {
         val r = android.media.MediaMetadataRetriever()

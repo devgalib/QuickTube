@@ -10,6 +10,9 @@ enum class Platform(val title: String, val home: String, val packageName: String
     TWITTER("Twitter/X", "https://x.com/", "com.twitter.android"),
     WHATSAPP("WhatsApp Status", "", "com.whatsapp"),
     SOUNDCLOUD("SoundCloud", "https://m.soundcloud.com/", null),
+    DAILYMOTION("Dailymotion", "https://www.dailymotion.com/", "com.dailymotion.dailymotion"),
+    VIMEO("Vimeo", "https://vimeo.com/", "com.vimeo.android.videoapp"),
+    BILIBILI("Bilibili", "https://m.bilibili.com/", "tv.danmaku.bili"),
     OTHER("Web", "", null);
 }
 
@@ -39,6 +42,11 @@ object Urls {
         }
         return out
     }
+
+    /** A direct link to a video, song or picture file (".mp4", ".m3u8", ".mp3"…). */
+    fun isMediaFile(url: String): Boolean =
+        url.substringBefore('#').substringBefore('?').substringAfterLast('.', "").lowercase() in
+            setOf("mp4", "m4v", "webm", "mkv", "mov", "m3u8", "mpd", "mp3", "m4a", "aac", "ogg", "opus", "flac", "wav", "jpg", "jpeg", "png", "webp", "gif")
 
     fun looksLikeUrl(text: String): Boolean {
         val t = text.trim()
@@ -101,6 +109,9 @@ object Urls {
             h.contains("instagram.com") -> Platform.INSTAGRAM
             h.contains("facebook.com") || h.contains("fb.watch") || h.contains("fb.com") -> Platform.FACEBOOK
             h.contains("tiktok.com") -> Platform.TIKTOK
+            h.contains("dailymotion.com") || h == "dai.ly" -> Platform.DAILYMOTION
+            h.contains("vimeo.com") -> Platform.VIMEO
+            h.contains("bilibili.com") || h == "b23.tv" -> Platform.BILIBILI
             h.contains("twitter.com") || h == "x.com" || h.contains("t.co") -> Platform.TWITTER
             h.contains("soundcloud.com") -> Platform.SOUNDCLOUD
             else -> Platform.OTHER

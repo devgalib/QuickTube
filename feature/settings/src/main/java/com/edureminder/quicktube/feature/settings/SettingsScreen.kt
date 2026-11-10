@@ -1,5 +1,6 @@
 package com.edureminder.quicktube.feature.settings
 
+import kotlinx.coroutines.launch
 import com.edureminder.quicktube.core.designsystem.LocalBottomBarHeight
 import android.content.Intent
 import android.net.Uri
@@ -67,6 +68,35 @@ fun SettingsScreen(actions: SettingsActions) {
     val context = LocalContext.current
     val updates = org.koin.compose.koinInject<com.edureminder.quicktube.core.update.UpdateManager>()
     val updateState by updates.state.collectAsStateWithLifecycle()
+    val backup = org.koin.compose.koinInject<com.edureminder.quicktube.core.data.BackupManager>()
+    val backupScope = androidx.compose.runtime.rememberCoroutineScope()
+    val backupOut = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        backupScope.launch {
+            val ok = runCatching {
+                val text = backup.export()
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    context.contentResolver.openOutputStream(uri, "wt")!!.use { it.write(text.toByteArray()) }
+                }
+            }.isSuccess
+            android.widget.Toast.makeText(context, if (ok) "Backup saved" else "Couldn't save the backup", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+    val backupIn = androidx.activity.compose.rememberLauncherForActivityResult(androidx.activity.result.contract.ActivityResultContracts.OpenDocument()) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        backupScope.launch {
+            val r = runCatching {
+                val text = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    context.contentResolver.openInputStream(uri)!!.use { it.readBytes().decodeToString() }
+                }
+                backup.import(text)
+            }
+            android.widget.Toast.makeText(
+                context, r.fold({ "Restored: " + it.summary() }, { it.message?.takeIf { m -> "QuickTube" in m } ?: "That file isn't a QuickTube backup" }),
+                android.widget.Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
     val updateSummary = when (updateState) {
         is com.edureminder.quicktube.core.update.UpdateState.Checking -> "Checking…"
         is com.edureminder.quicktube.core.update.UpdateState.UpToDate -> "You're on the latest version"
@@ -96,7 +126,7 @@ fun SettingsScreen(actions: SettingsActions) {
                 RowDivider()
                 NavRow(QtIcons.Public, "Content region", trailing = s.contentRegion.ifBlank { "Auto" }, tint = Teal, onClick = actions.region)
                 RowDivider()
-                SwitchRow("Trending on home", "Show trending videos on the Download tab", s.showTrending, QtIcons.TrendingUp) { v ->
+                SwitchRow("Recommended on home", "Show videos picked for you (or trending) on the Download tab", s.showTrending, QtIcons.TrendingUp) { v ->
                     vm.update { it.copy(showTrending = v) }
                 }
             }
@@ -130,6 +160,19 @@ fun SettingsScreen(actions: SettingsActions) {
                     "Share crash reports & usage", "Anonymous: never URLs, titles, searches or files. See PRIVACY.md",
                     s.analyticsEnabled, QtIcons.Shield,
                 ) { v -> vm.update { it.copy(analyticsEnabled = v) } }
+            }
+        }
+        // Moving to another phone: history, playlists, subscriptions, watch later and settings in one file.
+        item { GroupLabel("Backup") }
+        item {
+            QtCard {
+                NavRow(QtIcons.Download, "Back up to a file", "History, playlists, subscriptions, watch later, settings") {
+                    backupOut.launch("quicktube-backup-" + java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).format(java.util.Date()) + ".json")
+                }
+                RowDivider()
+                NavRow(QtIcons.Restore, "Restore from a file", "Adds them to this phone; nothing here is deleted") {
+                    backupIn.launch(arrayOf("application/json", "text/*", "application/octet-stream"))
+                }
             }
         }
         item { GroupLabel("Info") }

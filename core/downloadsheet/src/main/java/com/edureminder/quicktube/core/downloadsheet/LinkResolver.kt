@@ -47,7 +47,8 @@ class LinkResolver(
         }
         // Sites with their own reader: the page's embedded data is a preview or one stream; the reader has every quality.
         if (com.edureminder.quicktube.core.extractor.BilibiliReader.isBilibili(url) ||
-            com.edureminder.quicktube.core.extractor.DailymotionReader.videoId(url) != null) {
+            com.edureminder.quicktube.core.extractor.DailymotionReader.videoId(url) != null ||
+            com.edureminder.quicktube.core.extractor.VimeoReader.videoId(url) != null) {
             val native = universal.extract(url)
             timing("site reader (${native?.options?.size ?: -1} options)")
             if (native != null && native.options.isNotEmpty()) return SheetUi(

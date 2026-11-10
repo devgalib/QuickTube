@@ -123,7 +123,7 @@ private fun ShortCard(item: MediaItem, modifier: Modifier, onClick: () -> Unit, 
             Column(Modifier.align(Alignment.BottomStart).padding(10.dp)) {
                 Text(item.title, color = Color.White, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold,
                     maxLines = 2, overflow = TextOverflow.Ellipsis)
-                if (item.viewCount >= 0) Text(Format.views(item.viewCount), color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelSmall)
+                if (item.viewCount >= 0) Text(Format.views(item.viewCount, item.isLive), color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.labelSmall)
             }
             Box(
                 Modifier.align(Alignment.TopEnd).padding(6.dp).size(32.dp).clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(alpha = 0.45f))

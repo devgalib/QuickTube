@@ -69,7 +69,7 @@ object GallerySections {
      * What one gallery screen shows: [GALLERY_ALL] is every photo and video (the Photos tab), the virtual albums one
      * kind from every folder, and a real folder its photos and videos. Audio lives only in the Audios album.
      */
-    fun filter(items: List<GalleryMedia>, bucketId: Long): List<GalleryMedia> = when (bucketId) {
+    fun filter(items: List<GalleryMedia>, bucketId: Long, audio: Boolean = false): List<GalleryMedia> = if (audio) items.filter { it.isAudio && it.bucketId == bucketId } else when (bucketId) {
         GALLERY_ALL -> items.filter { !it.isAudio }
         GALLERY_PHOTOS -> items.filter { it.isPhoto }
         GALLERY_VIDEOS -> items.filter { it.isVideo }
@@ -99,6 +99,31 @@ object GallerySections {
      */
     fun folderQueue(items: List<GalleryMedia>, media: GalleryMedia): List<GalleryMedia> =
         items.filter { it.bucketId == media.bucketId && it.isAudio == media.isAudio && it.isVideo == media.isVideo }
+
+    /** Every folder holding audio files (Music, Download, WhatsApp Audio, Recordings…), newest audio first, with its song count. */
+    fun audioFolders(items: List<GalleryMedia>): List<GalleryAlbum> {
+        val counts = LinkedHashMap<Long, Int>()
+        val covers = HashMap<Long, GalleryMedia>()
+        for (m in items) {
+            if (!m.isAudio) continue
+            counts[m.bucketId] = (counts[m.bucketId] ?: 0) + 1
+            covers.getOrPut(m.bucketId) { m }
+        }
+        return counts.map { (id, n) -> covers.getValue(id).let { GalleryAlbum(id, it.bucketName.ifBlank { "Audio" }, n, it) } }
+    }
+
+    /**
+     * [folders] with the [pinned] ones (most recently pinned first) moved up, right after the virtual albums (all
+     * photos, videos, audios), which always lead; the rest keep their order.
+     */
+    fun pinFirst(folders: List<GalleryAlbum>, pinned: List<Long>): List<GalleryAlbum> {
+        if (pinned.isEmpty()) return folders
+        val (virtual, real) = folders.partition { it.virtual }
+        val byId = real.associateBy { it.bucketId }
+        val top = pinned.mapNotNull { byId[it] }
+        val ids = top.mapTo(HashSet()) { it.bucketId }
+        return virtual + top + real.filter { it.bucketId !in ids }
+    }
 
     /** Folders of photos and videos with their newest item as cover, most recently updated first. */
     fun albums(items: List<GalleryMedia>): List<GalleryAlbum> {

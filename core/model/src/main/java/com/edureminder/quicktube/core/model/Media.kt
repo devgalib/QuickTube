@@ -22,7 +22,12 @@ data class MediaItem(
     val subscriberCount: Long = -1,
     val streamCount: Long = -1,
     val description: String? = null,
+    /** When it was published (epoch ms), for newest-first lists; 0 when unknown. */
+    val publishedAt: Long = 0,
 )
+
+/** A channel followed in the app (no account): its new uploads make the Subscriptions feed. */
+data class Subscription(val url: String, val name: String, val avatar: String?, val subscribedAt: Long)
 
 data class MediaSection(val title: String, val items: List<MediaItem>, val style: SectionStyle = SectionStyle.ROW)
 
@@ -39,6 +44,8 @@ data class Comment(
     val likeCount: Int,
     val date: String?,
     val replyCount: Int = 0,
+    /** The page of this comment's replies (for [MediaRepository.comments]); null when it has none. */
+    val replies: Any? = null,
 )
 
 /** IMAGE: a photo (Instagram posts and carousels). */
@@ -90,7 +97,14 @@ data class VideoDetails(
     val commentsUrl: String?,
     /** Caption tracks (WebVTT), the video's own first, then auto-generated ones. */
     val subtitles: List<SubtitleTrack> = emptyList(),
+    /** The video's chapters (YouTube's own, else the times listed in its description), in order. */
+    val chapters: List<Chapter> = emptyList(),
 )
+
+data class Chapter(val title: String, val startMs: Long)
+
+/** A part of a video SponsorBlock users marked (sponsor, intro…), to skip; [category] as SponsorBlock names it. */
+data class SkipSegment(val startMs: Long, val endMs: Long, val category: String)
 
 /** One caption track: [language] is a BCP-47 tag ("en", "pt-BR"); [label] what people read ("English (auto-generated)"). */
 data class SubtitleTrack(

@@ -38,6 +38,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.ui.text.fromHtml
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -104,6 +105,8 @@ fun VideoScreen(
     FullscreenEffect(fullscreen && !LocalPipMode.current)
     BackHandler(fullscreen) { fullscreen = false }
     val saved by vm.savedFlow.collectAsStateWithLifecycle()
+    // SponsorBlock: a short note each time a sponsor / intro / … part was skipped.
+    LaunchedEffect(vm) { vm.skipped.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() } }
     if (details is LoadState.Success) AutoPipEffect(vm.player, playback)
     // Back closes the video; only the picture-in-picture button sends it to the floating window.
     fun leave(toPip: Boolean = false) {
@@ -194,7 +197,7 @@ fun VideoScreen(
                             Column(Modifier.weight(1f).padding(horizontal = 12.dp).clickable { showAbout = true }) {
                                 Text(v.item.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 Text(
-                                    listOf(v.item.uploader, Format.views(v.item.viewCount), v.uploadDate.orEmpty()).filter { it.isNotBlank() }.joinToString(" • "),
+                                    listOf(v.item.uploader, Format.views(v.item.viewCount, v.item.isLive), v.uploadDate.orEmpty()).filter { it.isNotBlank() }.joinToString(" • "),
                                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.padding(top = 4.dp),
                                 )
@@ -219,6 +222,26 @@ fun VideoScreen(
                                 modifier = Modifier.padding(start = 8.dp))
                         }
                     }
+                    // Chapters: tap one to jump there.
+                    if (v.chapters.isNotEmpty()) item {
+                        Text("Chapters", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(start = 16.dp, bottom = 6.dp))
+                        androidx.compose.foundation.lazy.LazyRow(
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp),
+                            horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.padding(bottom = 12.dp),
+                        ) {
+                            items(v.chapters.size) { i ->
+                                val c = v.chapters[i]
+                                Column(
+                                    Modifier.width(150.dp).clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                                        .clickable { vm.player.seekTo(c.startMs) }.padding(10.dp),
+                                ) {
+                                    Text(Format.duration(c.startMs / 1000), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                                    Text(c.title, style = MaterialTheme.typography.bodySmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                }
+                            }
+                        }
+                    }
                     item {
                         Column(
                             Modifier.fillMaxWidth().padding(horizontal = 16.dp).clip(RoundedCornerShape(14.dp))
@@ -228,7 +251,7 @@ fun VideoScreen(
                             Text("Comments", style = MaterialTheme.typography.titleSmall)
                             val first = comments.items.firstOrNull()
                             if (first != null) Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Avatar(first.authorAvatar, 24)
+                                CommentAvatar(first, 24)
                                 Text(first.text, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall,
                                     modifier = Modifier.padding(start = 10.dp))
                             } else Text(
@@ -268,8 +291,10 @@ private fun AboutSheet(v: VideoDetails, vm: VideoViewModel, onDismiss: () -> Uni
                 }
             }
             Row(Modifier.padding(vertical = 8.dp)) {
-                TextButton(onClick = {}) {
-                    Icon(QtIcons.ThumbUp, null); Text(" " + if (v.likeCount >= 0) Format.count(v.likeCount) else "Like")
+                // Likes are shown, not given: liking needs a YouTube account.
+                if (v.likeCount >= 0) Row(Modifier.padding(horizontal = 12.dp).heightIn(min = 40.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(QtIcons.ThumbUp, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(" " + Format.count(v.likeCount), color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 TextButton(onClick = {
                     context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).setType("text/plain")
@@ -282,11 +307,13 @@ private fun AboutSheet(v: VideoDetails, vm: VideoViewModel, onDismiss: () -> Uni
             }
             HorizontalDivider()
             Text(
-                listOf(Format.views(v.item.viewCount), v.uploadDate.orEmpty()).filter { it.isNotBlank() }.joinToString("  "),
+                listOf(Format.views(v.item.viewCount, v.item.isLive), v.uploadDate.orEmpty()).filter { it.isNotBlank() }.joinToString("  "),
                 style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(top = 12.dp),
             )
-            Text(v.description.replace(Regex("<br\\s*/?>"), "\n").replace(Regex("<[^>]+>"), ""),
-                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 12.dp))
+            Description(v.description, v.item.url, onSeek = { vm.player.seekTo(it) }, onOpen = { u ->
+                runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(u)).setPackage(context.packageName)) }
+                    .onFailure { runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(u))) } }
+            })
         }
     }
 }
@@ -294,12 +321,13 @@ private fun AboutSheet(v: VideoDetails, vm: VideoViewModel, onDismiss: () -> Uni
 @Composable
 private fun CommentsSheet(vm: VideoViewModel, onDismiss: () -> Unit) {
     val ui by vm.comments.collectAsStateWithLifecycle()
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    // One open state only: Back always closes it (with a half-open state, opening replies made Back only collapse it).
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Text("Comments", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
         val state = rememberLazyListState()
         state.OnNearEnd { vm.loadComments() }
         LazyColumn(state = state, modifier = Modifier.fillMaxWidth().heightIn(min = 300.dp, max = 640.dp)) {
-            items(ui.items) { CommentRow(it) }
+            items(ui.items) { CommentRow(it, vm) }
             if (ui.loading) item { FooterLoading() }
             if (!ui.loading && ui.items.isEmpty()) item { Text("No comments", Modifier.padding(16.dp)) }
         }
@@ -307,18 +335,58 @@ private fun CommentsSheet(vm: VideoViewModel, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun CommentRow(c: Comment) {
-    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
-        Avatar(c.authorAvatar, 32)
+private fun CommentRow(c: Comment, vm: VideoViewModel? = null, indent: Boolean = false) {
+    var open by remember { mutableStateOf(false) }
+    var replies by remember { mutableStateOf<List<Comment>>(emptyList()) }
+    var next by remember { mutableStateOf<Any?>(c.replies) }
+    var loading by remember { mutableStateOf(false) }
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    fun more() {
+        val page = next ?: return
+        if (loading || vm == null) return
+        loading = true
+        scope.launch {
+            runCatching { vm.loadReplies(page) }.onSuccess { p -> replies = replies + p.items; next = p.nextPage }.onFailure { next = null }
+            loading = false
+        }
+    }
+    Row(Modifier.fillMaxWidth().padding(start = if (indent) 60.dp else 16.dp, end = 16.dp, top = 10.dp, bottom = 10.dp)) {
+        CommentAvatar(c, if (indent) 24 else 32)
         Column(Modifier.padding(start = 12.dp)) {
             Text(listOfNotNull(c.author, c.date).joinToString(" • "), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(c.text, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(vertical = 4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(QtIcons.ThumbUp, null, Modifier.padding(end = 4.dp).heightIn(max = 14.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(if (c.likeCount > 0) Format.count(c.likeCount.toLong()) else "", style = MaterialTheme.typography.labelSmall)
-                if (c.replyCount > 0) Text("   ${c.replyCount} replies", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
             }
+            // YouTube's "View 12 replies": opens the thread under the comment.
+            if (c.replyCount > 0 && c.replies != null && vm != null) Text(
+                if (open) "Hide replies" else "View ${c.replyCount} ${if (c.replyCount == 1) "reply" else "replies"}",
+                style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.padding(top = 6.dp).clip(RoundedCornerShape(50)).clickable {
+                    open = !open
+                    if (open && replies.isEmpty()) more()
+                }.padding(vertical = 4.dp, horizontal = 2.dp),
+            )
         }
+    }
+    if (open) {
+        replies.forEach { r -> CommentRow(r, indent = true) }
+        if (loading) FooterLoading()
+        else if (next != null && replies.isNotEmpty()) Text("More replies", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(start = 60.dp, bottom = 8.dp).clickable { more() }.padding(4.dp))
+    }
+}
+
+/** The author's picture, or (when YouTube sends none) their first letter on a colour of their own, as YouTube does. */
+@Composable
+private fun CommentAvatar(c: Comment, size: Int) {
+    if (c.authorAvatar != null) { Avatar(c.authorAvatar, size); return }
+    val name = c.author.removePrefix("@")
+    val colors = listOf(0xFFE57373, 0xFF64B5F6, 0xFF81C784, 0xFFFFB74D, 0xFFBA68C8, 0xFF4DB6AC, 0xFFF06292, 0xFF7986CB)
+    Box(Modifier.size(size.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(colors[Math.floorMod(name.hashCode(), colors.size)])),
+        contentAlignment = Alignment.Center) {
+        Text(name.firstOrNull()?.uppercase() ?: "?", color = Color.White, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -371,4 +439,26 @@ private fun VideoPageSkeleton(title: String?, modifier: Modifier) {
             }
         }
     }
+}
+
+/**
+ * The description as YouTube shows it: HTML decoded (no "&quot;" or "&amp;"), line breaks kept, links tappable. A link
+ * to a moment of this same video (a chapter time like 2:15) seeks the player instead of opening a page.
+ */
+@Composable
+private fun Description(html: String, videoUrl: String, onSeek: (Long) -> Unit, onOpen: (String) -> Unit) {
+    val id = com.edureminder.quicktube.core.common.Urls.youtubeVideoId(videoUrl)
+    val link = MaterialTheme.colorScheme.primary
+    val text = remember(html) {
+        androidx.compose.ui.text.AnnotatedString.fromHtml(
+            html.replace("\n", "<br>"),
+            linkStyles = androidx.compose.ui.text.TextLinkStyles(androidx.compose.ui.text.SpanStyle(color = link)),
+            linkInteractionListener = androidx.compose.ui.text.LinkInteractionListener { l ->
+                val u = (l as? androidx.compose.ui.text.LinkAnnotation.Url)?.url ?: return@LinkInteractionListener
+                val t = Regex("""[?&#]t=(\d+)""").find(u)?.groupValues?.get(1)?.toLongOrNull()
+                if (t != null && id != null && com.edureminder.quicktube.core.common.Urls.youtubeVideoId(u) == id) onSeek(t * 1000) else onOpen(u)
+            },
+        )
+    }
+    Text(text, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 12.dp))
 }

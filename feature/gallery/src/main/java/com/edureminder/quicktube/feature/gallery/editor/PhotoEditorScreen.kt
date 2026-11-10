@@ -86,23 +86,28 @@ import org.koin.compose.koinInject
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
-private enum class Tab(val label: String) { CROP("Crop"), ADJUST("Adjust"), FILTERS("Filters") }
-private enum class Tool(val label: String) { BRIGHTNESS("Brightness"), CONTRAST("Contrast"), SATURATION("Saturation"), WARMTH("Warmth") }
+private enum class Tab(val label: String) { CROP("Crop"), ADJUST("Adjust"), FILTERS("Filters"), FRAMES("Frames"), TEXT("Text") }
+
+/** Adjustments; [signed] ones go -100..100, the others 0..100. */
+private enum class Tool(val label: String, val signed: Boolean = true) {
+    BRIGHTNESS("Brightness"), CONTRAST("Contrast"), SATURATION("Saturation"), WARMTH("Warmth"), TINT("Tint"), HUE("Hue"),
+    FADE("Fade", false), VIGNETTE("Vignette", false), GRAIN("Grain", false),
+}
 
 /** Crop shapes: width / height, null = free. "Original" uses the photo's own shape. */
 private val Aspects = listOf<Pair<String, Float?>>("Free" to null, "Original" to -1f, "1:1" to 1f, "4:5" to 0.8f, "3:4" to 0.75f, "16:9" to 16f / 9f, "9:16" to 9f / 16f)
 
-private val EditorBg = Color(0xFF0E0F12)
-private val Panel = Color(0xFF1A1C21)
-private val Muted = Color.White.copy(alpha = 0.62f)
+internal val EditorBg = Color(0xFF0E0F12)
+internal val Panel = Color(0xFF1A1C21)
+internal val Muted = Color.White.copy(alpha = 0.62f)
 
 /**
- * A light photo editor: crop (free or fixed shapes, rotate, flip), adjust (brightness, contrast, saturation, warmth)
- * and filters. Edits are previewed live on a screen-sized copy and saved full size as a new photo in
- * Pictures/QuickTube; the original is never changed.
+ * The photo editor: crop (free or fixed shapes, rotate, flip), nine adjustments (brightness to grain), 25 filters in
+ * shelves with a strength slider, and frames (classic, cute and luxe, in several colours). Edits are previewed on a
+ * screen-sized copy and saved full size as a new photo in Pictures/QuickTube; the original is never changed.
  */
 @Composable
-fun PhotoEditorScreen(mediaId: Long, onBack: () -> Unit) {
+fun PhotoEditorScreen(mediaId: Long, onBack: () -> Unit, onCollage: (() -> Unit)? = null) {
     val context = LocalContext.current
     val repo = koinInject<GalleryRepository>()
     val scope = rememberCoroutineScope()
@@ -112,8 +117,13 @@ fun PhotoEditorScreen(mediaId: Long, onBack: () -> Unit) {
     var tab by remember { mutableStateOf(Tab.CROP) }
     var tool by remember { mutableStateOf(Tool.BRIGHTNESS) }
     var aspect by remember { mutableStateOf<Float?>(null) }
+    var filterGroup by remember { mutableStateOf(FilterGroup.NATURAL) }
+    var frameGroup by remember { mutableStateOf(FrameGroup.CLASSIC) }
     var saving by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf(false) }
+    // Text tab: the picked text, and the typing dialog (null = closed, "" = a new text).
+    var pickedText by remember { mutableStateOf<Long?>(null) }
+    var typing by remember { mutableStateOf<TextLayer?>(null) }
 
     fun save() {
         val m = media ?: return
@@ -146,8 +156,24 @@ fun PhotoEditorScreen(mediaId: Long, onBack: () -> Unit) {
     if (window != null) com.edureminder.quicktube.feature.gallery.DarkSystemBars(remember(window, view) { androidx.core.view.WindowCompat.getInsetsController(window, view) })
 
     val oriented = remember(preview, edit.quarterTurns, edit.flipped) { preview?.let { orient(it, edit.quarterTurns, edit.flipped).asImageBitmap() } }
+    // Everything but the crop tab shows the photo exactly as it will be saved (looks, effects, frame), worked out off
+    // the main thread from a screen-sized copy, newest edit first.
+    val small = remember(preview) { preview?.let { scaled(it, 1280) } }
+    var rendered by remember { mutableStateOf<ImageBitmap?>(null) }
+    // On the Text tab the words are drawn live over the picture instead, so they can be dragged smoothly.
+    val shown = if (tab == Tab.TEXT) edit.copy(texts = emptyList()) else edit
+    LaunchedEffect(small, shown) {
+        val src = small ?: return@LaunchedEffect
+        rendered = withContext(Dispatchers.Default) { render(src, shown).asImageBitmap() }
+    }
+    val frameThumbs = remember(preview, edit.crop, edit.quarterTurns, edit.flipped, edit.frameColor, edit.frame) {
+        preview?.let { p ->
+            val base = render(scaled(p, 200), edit.copy(frame = PhotoFrame.NONE, filter = PhotoFilter.NONE, vignette = 0f, grain = 0f))
+            PhotoFrame.entries.associateWith { f -> Frames.draw(base, f, if (f == edit.frame) edit.frameColor else 0).asImageBitmap() }
+        }.orEmpty()
+    }
     val colorFilter = remember(edit) { edit.colorMatrix()?.let { ColorFilter.colorMatrix(ColorMatrix(it)) } }
-    val thumb = remember(oriented, edit.crop) { preview?.let { p -> render(scaled(p, 220), edit.copy(filter = PhotoFilter.NONE, brightness = 0f, contrast = 0f, saturation = 0f, warmth = 0f)).asImageBitmap() } }
+    val thumb = remember(oriented, edit.crop) { preview?.let { p -> render(scaled(p, 220), PhotoEdit(quarterTurns = edit.quarterTurns, flipped = edit.flipped, crop = edit.crop)).asImageBitmap() } }
 
     fun applyAspect(a: Float?) {
         aspect = a
@@ -180,7 +206,15 @@ fun PhotoEditorScreen(mediaId: Long, onBack: () -> Unit) {
             val img = oriented
             if (img == null) CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp)
             else if (tab == Tab.CROP) CropView(img, edit.crop, aspect, colorFilter) { edit = edit.copy(crop = it) }
-            else CroppedImage(img, edit.crop, colorFilter)
+            else rendered?.let { r ->
+                Image(r, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                if (tab == Tab.TEXT) TextOverlay(
+                    r.width, r.height, edit.texts, pickedText, onSelect = { pickedText = it },
+                    onMove = { id, dx, dy ->
+                        edit = edit.copy(texts = edit.texts.map { t -> if (t.id == id) t.copy(x = (t.x + dx).coerceIn(0f, 1f), y = (t.y + dy).coerceIn(0f, 1f)) else t })
+                    },
+                )
+            } ?: CroppedImage(img, edit.crop, colorFilter)
             if (saving) Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.45f)), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = Color.White, strokeWidth = 3.dp)
             }
@@ -217,15 +251,54 @@ fun PhotoEditorScreen(mediaId: Long, onBack: () -> Unit) {
                         val value = valueOf(edit, tool)
                         Row(Modifier.padding(horizontal = 24.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                             Slider(
-                                value, { v -> edit = withValue(edit, tool, if (abs(v) < 0.03f) 0f else v) }, Modifier.weight(1f), valueRange = -1f..1f,
+                                value, { v -> edit = withValue(edit, tool, if (abs(v) < 0.03f) 0f else v) }, Modifier.weight(1f),
+                                valueRange = if (tool.signed) -1f..1f else 0f..1f,
                                 colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = 0.2f)),
                             )
                             Text("${(value * 100).roundToInt()}", color = Color.White, fontSize = 13.sp, modifier = Modifier.width(40.dp).padding(start = 8.dp))
                         }
                     }
-                    Tab.FILTERS -> LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        items(PhotoFilter.entries) { f ->
-                            FilterTile(f, thumb, edit.filter == f) { edit = edit.copy(filter = f) }
+                    Tab.FILTERS -> Column {
+                        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(FilterGroup.entries) { g -> Chip(g.label, filterGroup == g) { filterGroup = g } }
+                        }
+                        LazyRow(Modifier.padding(top = 10.dp), contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(PhotoFilter.entries.filter { it == PhotoFilter.NONE || it.group == filterGroup }) { f ->
+                                FilterTile(f, thumb, edit.filter == f) { edit = edit.copy(filter = f, filterStrength = 1f) }
+                            }
+                        }
+                        // How much of the look.
+                        if (edit.filter != PhotoFilter.NONE) Row(Modifier.padding(horizontal = 24.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text("Strength", color = Muted, fontSize = 12.sp, modifier = Modifier.width(64.dp))
+                            Slider(edit.filterStrength, { edit = edit.copy(filterStrength = it) }, Modifier.weight(1f),
+                                colors = SliderDefaults.colors(thumbColor = Color.White, activeTrackColor = Color.White, inactiveTrackColor = Color.White.copy(alpha = 0.2f)))
+                            Text("${(edit.filterStrength * 100).roundToInt()}", color = Color.White, fontSize = 13.sp, modifier = Modifier.width(36.dp).padding(start = 6.dp))
+                        }
+                    }
+                    Tab.TEXT -> TextPanel(
+                        edit.texts, pickedText,
+                        onAdd = { typing = TextLayer(System.nanoTime(), "") },
+                        onEdit = { typing = it },
+                        onDelete = { l -> edit = edit.copy(texts = edit.texts.filter { it.id != l.id }); pickedText = null },
+                        onChange = { l -> edit = edit.copy(texts = edit.texts.map { if (it.id == l.id) l else it }) },
+                    )
+                    Tab.FRAMES -> Column {
+                        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(FrameGroup.entries) { g -> Chip(g.label, frameGroup == g) { frameGroup = g } }
+                            if (onCollage != null) item { Chip("Collage +", false) { onCollage() } }
+                        }
+                        LazyRow(Modifier.padding(top = 10.dp), contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            items(PhotoFrame.entries.filter { it == PhotoFrame.NONE || it.group == frameGroup }) { f ->
+                                FrameTile(f, frameThumbs[f], edit.frame == f) { edit = edit.copy(frame = f, frameColor = if (edit.frame == f) edit.frameColor else 0) }
+                            }
+                        }
+                        // The frame's colours.
+                        if (edit.frame.colors.size > 1) Row(Modifier.padding(start = 16.dp, top = 10.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            edit.frame.colors.forEachIndexed { i, c ->
+                                Box(Modifier.size(30.dp).clip(CircleShape).background(Color(c))
+                                    .border(if (i == edit.frameColor) 3.dp else 1.dp, if (i == edit.frameColor) Color.White else Color.White.copy(alpha = 0.3f), CircleShape)
+                                    .pressable(scaleDown = 0.85f, onClick = { edit = edit.copy(frameColor = i) }))
+                            }
                         }
                     }
                 }
@@ -237,11 +310,11 @@ fun PhotoEditorScreen(mediaId: Long, onBack: () -> Unit) {
             Tab.entries.forEach { t ->
                 val on = t == tab
                 Column(
-                    Modifier.clip(RoundedCornerShape(14.dp)).pressable(onClick = { tab = t }).padding(horizontal = 18.dp, vertical = 6.dp),
+                    Modifier.clip(RoundedCornerShape(14.dp)).pressable(onClick = { tab = t }).padding(horizontal = 10.dp, vertical = 6.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Icon(
-                        when (t) { Tab.CROP -> QtIcons.PCrop; Tab.ADJUST -> QtIcons.Tune; Tab.FILTERS -> QtIcons.Palette }, null,
+                        when (t) { Tab.CROP -> QtIcons.PCrop; Tab.ADJUST -> QtIcons.Tune; Tab.FILTERS -> QtIcons.Palette; Tab.FRAMES -> QtIcons.CropSquare; Tab.TEXT -> QtIcons.Edit }, null,
                         tint = if (on) Color.White else Muted, modifier = Modifier.size(24.dp),
                     )
                     Text(t.label, color = if (on) Color.White else Muted, fontSize = 12.sp, fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
@@ -251,6 +324,14 @@ fun PhotoEditorScreen(mediaId: Long, onBack: () -> Unit) {
         }
     }
 
+    typing?.let { t ->
+        TextEntryDialog(t.text, onDismiss = { typing = null }) { words ->
+            edit = if (edit.texts.any { it.id == t.id }) edit.copy(texts = edit.texts.map { if (it.id == t.id) it.copy(text = words) else it })
+            else edit.copy(texts = edit.texts + TextTheme.BOLD.applyTo(t.copy(text = words)))
+            pickedText = t.id
+            typing = null
+        }
+    }
     if (confirmDiscard) androidx.compose.material3.AlertDialog(
         onDismissRequest = { confirmDiscard = false },
         title = { Text("Discard changes?") },
@@ -262,11 +343,14 @@ fun PhotoEditorScreen(mediaId: Long, onBack: () -> Unit) {
 
 private fun valueOf(e: PhotoEdit, t: Tool) = when (t) {
     Tool.BRIGHTNESS -> e.brightness; Tool.CONTRAST -> e.contrast; Tool.SATURATION -> e.saturation; Tool.WARMTH -> e.warmth
+    Tool.TINT -> e.tint; Tool.HUE -> e.hue; Tool.FADE -> e.fade; Tool.VIGNETTE -> e.vignette; Tool.GRAIN -> e.grain
 }
 
 private fun withValue(e: PhotoEdit, t: Tool, v: Float) = when (t) {
     Tool.BRIGHTNESS -> e.copy(brightness = v); Tool.CONTRAST -> e.copy(contrast = v)
     Tool.SATURATION -> e.copy(saturation = v); Tool.WARMTH -> e.copy(warmth = v)
+    Tool.TINT -> e.copy(tint = v); Tool.HUE -> e.copy(hue = v)
+    Tool.FADE -> e.copy(fade = v); Tool.VIGNETTE -> e.copy(vignette = v); Tool.GRAIN -> e.copy(grain = v)
 }
 
 /** The largest centered crop of [ratio] (width / height, in pixels) in a [w]x[h] picture, as fractions. */
@@ -275,7 +359,7 @@ private fun centeredCrop(ratio: Float, w: Int, h: Int): CropRect {
     return if (r <= 1f) CropRect((1f - r) / 2f, 0f, (1f + r) / 2f, 1f) else CropRect(0f, (1f - 1f / r) / 2f, 1f, (1f + 1f / r) / 2f)
 }
 
-private fun scaled(b: Bitmap, maxSide: Int): Bitmap {
+internal fun scaled(b: Bitmap, maxSide: Int): Bitmap {
     val big = maxOf(b.width, b.height)
     if (big <= maxSide) return b
     val f = maxSide.toFloat() / big
@@ -397,7 +481,7 @@ private fun dragCrop(c: CropRect, h: Handle, dx: Float, dy: Float, fixed: Float?
 }
 
 @Composable
-private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
+internal fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
     Text(
         text, color = if (selected) Color.Black else Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium,
         modifier = Modifier.clip(CircleShape).background(if (selected) Color.White else Panel).pressable(scaleDown = 0.94f, onClick = onClick)
@@ -417,14 +501,14 @@ private fun ToolButton(icon: ImageVector, label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun RoundIcon(icon: ImageVector, label: String, onClick: () -> Unit) {
+internal fun RoundIcon(icon: ImageVector, label: String, onClick: () -> Unit) {
     Box(Modifier.size(44.dp).clip(CircleShape).pressable(scaleDown = 0.9f, onClick = onClick), contentAlignment = Alignment.Center) {
         Icon(icon, label, tint = Color.White)
     }
 }
 
 @Composable
-private fun FilterTile(f: PhotoFilter, thumb: ImageBitmap?, selected: Boolean, onClick: () -> Unit) {
+internal fun FilterTile(f: PhotoFilter, thumb: ImageBitmap?, selected: Boolean, onClick: () -> Unit) {
     Column(Modifier.pressable(scaleDown = 0.94f, onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
         Box(
             Modifier.size(64.dp).clip(RoundedCornerShape(12.dp)).background(Panel)
@@ -454,3 +538,18 @@ private val FlipIcon: ImageVector by lazy {
     }.build()
 }
 
+
+@Composable
+internal fun FrameTile(f: PhotoFrame, thumb: ImageBitmap?, selected: Boolean, onClick: () -> Unit) {
+    Column(Modifier.pressable(scaleDown = 0.94f, onClick = onClick), horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier.size(70.dp).clip(RoundedCornerShape(12.dp)).background(Panel)
+                .then(if (selected) Modifier.border(2.dp, Color.White, RoundedCornerShape(12.dp)) else Modifier),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (f == PhotoFrame.NONE) Icon(QtIcons.Close, null, tint = Muted)
+            else if (thumb != null) Image(thumb, f.label, contentScale = ContentScale.Fit, modifier = Modifier.fillMaxSize().padding(4.dp))
+        }
+        Text(f.label, color = if (selected) Color.White else Muted, fontSize = 12.sp, modifier = Modifier.padding(top = 6.dp))
+    }
+}

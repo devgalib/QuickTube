@@ -14,6 +14,9 @@ import java.util.concurrent.TimeUnit
 internal class LibraryRepositoryImpl(
     private val dao: DownloadDao,
     private val history: DeletedHistoryDao,
+    private val context: android.content.Context,
+    /** Where files taken out of the vault go back to (the download folder setting). */
+    private val downloadDir: suspend () -> String,
 ) : LibraryRepository {
     override val downloads = dao.observeAll().map { list -> list.map { it.asModel() } }
     override val trash = dao.observeTrash().map { list -> list.map { it.asModel() } }
@@ -44,10 +47,8 @@ internal class LibraryRepositoryImpl(
                 // Its caption files go with it.
                 com.edureminder.quicktube.core.common.SubtitleSidecars.find(File(e.filePath)).forEach { it.second.delete() }
                 File(e.filePath).delete()
-                File(e.filePath + ".part").delete()
-                File(e.filePath + ".audio.part").delete()
-                File(e.filePath + ".part.idx").delete()
-                File(e.filePath + ".audio.part.idx").delete()
+                // The same temporary files the download engine cleans up (parts, resume state, merge marker, private parts).
+                com.edureminder.quicktube.core.common.PartFiles.delete(e.filePath, e.id, File(context.noBackupFilesDir, "parts"))
             }
         }
         dao.delete(ids)
@@ -73,8 +74,44 @@ internal class LibraryRepositoryImpl(
         deleteForever(dao.trashOlderThan(before).map { it.id })
     }
 
-    override suspend fun setVault(ids: List<Long>, inVault: Boolean) {
-        ids.forEach { id -> dao.get(id)?.let { dao.update(it.copy(inVault = inVault)) } }
+    /**
+     * The vault really hides files: they move (with their caption files) into the app's private storage, where no
+     * gallery or file app can see them, and back to the download folder when taken out.
+     */
+    override suspend fun setVault(ids: List<Long>, inVault: Boolean) = withContext(Dispatchers.IO) {
+        val target = if (inVault) vaultDir() else File(downloadDir()).apply { mkdirs() }
+        ids.forEach { id ->
+            val e = dao.get(id) ?: return@forEach
+            val src = File(e.filePath)
+            val moved = if (src.exists() && src.parentFile != target) moveInto(src, target) else src
+            if (moved == null) return@forEach // couldn't move it: leave it where it is, as it was
+            dao.update(e.copy(inVault = inVault, filePath = moved.absolutePath))
+            // The phone's media index forgets the old place and learns the new one (none for the private vault).
+            android.media.MediaScannerConnection.scanFile(context, listOfNotNull(src.absolutePath, moved.absolutePath.takeIf { !inVault }).toTypedArray(), null, null)
+        }
+    }
+
+    private fun vaultDir() = File(context.filesDir, "vault").apply { mkdirs() }
+
+    /** Moves [src] and its caption files into [dir] under a free name; null when it couldn't be moved. */
+    private fun moveInto(src: File, dir: File): File? {
+        var dest = File(dir, src.name)
+        var n = 1
+        while (dest.exists()) dest = File(dir, "${src.nameWithoutExtension} ($n).${src.extension}").also { n++ }
+        val captions = com.edureminder.quicktube.core.common.SubtitleSidecars.find(src)
+        if (!move(src, dest)) return null
+        captions.forEach { (_, f) -> move(f, File(dir, dest.nameWithoutExtension + f.name.removePrefix(src.nameWithoutExtension))) }
+        return dest
+    }
+
+    /** Rename when on the same storage, else copy then delete (public storage ↔ app storage). */
+    private fun move(src: File, dest: File): Boolean {
+        if (src.renameTo(dest)) return true
+        return runCatching {
+            src.inputStream().use { i -> dest.outputStream().use { o -> i.copyTo(o, 1 shl 16) } }
+            if (dest.length() != src.length()) error("short copy")
+            src.delete()
+        }.onFailure { dest.delete() }.isSuccess
     }
 
     override suspend fun rename(id: Long, newTitle: String): Boolean = withContext(Dispatchers.IO) {

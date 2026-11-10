@@ -41,6 +41,8 @@ class RecycleBinViewModel(private val library: LibraryRepository) : ViewModel() 
 
 // ---------- Vault ----------
 
+private typealias PinHash = com.edureminder.quicktube.core.common.PinHash
+
 class VaultViewModel(
     private val library: LibraryRepository,
     private val settings: SettingsRepository,
@@ -52,8 +54,13 @@ class VaultViewModel(
     private val _unlocked = MutableStateFlow(false)
     val unlocked: StateFlow<Boolean> = _unlocked
 
-    fun setPin(p: String) = viewModelScope.launch { settings.update { it.copy(vaultPin = p) }; _unlocked.value = true }
-    fun tryUnlock(p: String): Boolean = (p == pin.value).also { if (it) _unlocked.value = true }
+    fun setPin(p: String) = viewModelScope.launch { settings.update { it.copy(vaultPin = PinHash.hash(p)) }; _unlocked.value = true }
+    fun tryUnlock(p: String): Boolean = PinHash.matches(p, pin.value).also { ok ->
+        if (!ok) return@also
+        _unlocked.value = true
+        // A PIN saved before hashing is converted now that it's known.
+        if (!PinHash.isHashed(pin.value.orEmpty())) viewModelScope.launch { settings.update { it.copy(vaultPin = PinHash.hash(p)) } }
+    }
     fun lock() { _unlocked.value = false }
     fun unlockItems(ids: List<Long>) = viewModelScope.launch { library.setVault(ids, false) }
     fun delete(ids: List<Long>) = viewModelScope.launch { library.moveToTrash(ids) }

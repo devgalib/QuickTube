@@ -215,7 +215,23 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
         current?.path?.takeIf { it.isNotBlank() && !current.isAudio }?.let { com.edureminder.quicktube.core.common.SubtitleSidecars.find(java.io.File(it)) }.orEmpty()
     }
     var captionOn by remember(current?.path) { mutableStateOf<String?>(null) }
+    // A video saved with captions (YouTube downloads) shows them at once, in the phone's language when there is one.
+    val appSettings = org.koin.compose.koinInject<com.edureminder.quicktube.core.data.SettingsRepository>()
+    LaunchedEffect(current?.path, savedCaptions) {
+        val path = current?.path ?: return@LaunchedEffect
+        if (savedCaptions.isEmpty() || captionOn != null || !appSettings.current().autoSubtitles) return@LaunchedEffect
+        val f = com.edureminder.quicktube.core.common.SubtitleSidecars.preferred(java.io.File(path), savedCaptions.map { it.second }) ?: return@LaunchedEffect
+        // The item has to be playing before captions can be added to it.
+        kotlinx.coroutines.delay(400)
+        captionOn = f.path
+        controller.setSubtitle(android.net.Uri.fromFile(f), com.edureminder.quicktube.core.common.SubtitleSidecars.mimeOf(f))
+    }
     var captionStyleOpen by remember { mutableStateOf(false) }
+    var queueOpen by remember { mutableStateOf(false) }
+    var pickOpen by remember { mutableStateOf(false) }
+    // Clearing the queue (from its sheet) leaves nothing to play: close the player.
+    var hadQueue by remember { mutableStateOf(false) }
+    LaunchedEffect(state.queue.isEmpty()) { if (state.queue.isNotEmpty()) hadQueue = true else if (hadQueue) onBack() }
     if (captionStyleOpen) com.edureminder.quicktube.core.playerui.CaptionStyleSheet { captionStyleOpen = false }
     val subtitlePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
@@ -253,7 +269,15 @@ fun GalleryPlayerScreen(mediaId: Long, onBack: () -> Unit) {
     )
 
     if (state.audioOnly && current != null) {
+        if (queueOpen) com.edureminder.quicktube.feature.gallery.AudioQueueSheet(controller, onAdd = { queueOpen = false; pickOpen = true }, onDismiss = { queueOpen = false })
+        if (pickOpen) androidx.compose.ui.window.Dialog(
+            onDismissRequest = { pickOpen = false },
+            properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+        ) {
+            com.edureminder.quicktube.feature.gallery.AudioPickerScreen(add = true, onBack = { pickOpen = false }, onOpenPlayer = { pickOpen = false })
+        }
         AudioModeScreen(
+            onQueue = { queueOpen = true },
             media = current, state = state, ui = ui, controller = controller,
             onBackToVideo = { controller.setAudioOnly(false) },
             onClose = onBack,

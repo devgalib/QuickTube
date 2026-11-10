@@ -124,4 +124,27 @@ class GallerySectionsTest {
         val audio = mixed.first { it.id == 4L }
         assertEquals(listOf(4L), GallerySections.folderQueue(mixed, audio).map { it.id })
     }
+
+    @Test
+    fun `audio folders list every folder with songs, and a folder shows only its songs`() {
+        val d = LocalDateTime.of(2026, 10, 1, 0, 0)
+        val items = listOf(
+            media(1, d, bucket = 5, name = "Music", audio = true), media(2, d, bucket = 7, name = "WhatsApp Audio", audio = true),
+            media(3, d, bucket = 5, name = "Music", audio = true), media(4, d, bucket = 5, name = "Music"), media(5, d, bucket = 9, name = "Camera"),
+        )
+        val folders = GallerySections.audioFolders(items)
+        assertEquals(listOf("Music" to 2, "WhatsApp Audio" to 1), folders.map { it.name to it.count })
+        assertEquals(listOf(1L, 3L), GallerySections.filter(items, 5, audio = true).map { it.id })
+        // The same folder as a photo album keeps its photos and videos only.
+        assertEquals(listOf(4L), GallerySections.filter(items, 5).map { it.id })
+    }
+
+    @Test
+    fun `pinned folders come right after the virtual albums, newest pin first`() {
+        fun a(id: Long, virtual: Boolean = false) = com.edureminder.quicktube.core.model.GalleryAlbum(id, "f$id", 1, null, virtual)
+        val folders = listOf(a(GALLERY_PHOTOS, true), a(GALLERY_VIDEOS, true), a(1), a(2), a(3), a(4))
+        val out = GallerySections.pinFirst(folders, listOf(4, 2, 99))
+        assertEquals(listOf(GALLERY_PHOTOS, GALLERY_VIDEOS, 4L, 2L, 1L, 3L), out.map { it.bucketId })
+        assertEquals(folders, GallerySections.pinFirst(folders, emptyList()))
+    }
 }

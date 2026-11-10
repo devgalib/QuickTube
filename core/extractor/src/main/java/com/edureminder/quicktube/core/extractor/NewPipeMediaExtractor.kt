@@ -228,6 +228,9 @@ class NewPipeMediaExtractor(
             related = info.relatedItems.mapNotNull { it.toItem() },
             commentsUrl = info.url,
             subtitles = subtitlesOf(info),
+            chapters = runCatching { info.streamSegments.map { com.edureminder.quicktube.core.model.Chapter(it.title, it.startTimeSeconds * 1000L) } }
+                .getOrDefault(emptyList()).takeIf { it.size >= 2 }
+                ?: Chapters.fromDescription(info.description?.content.orEmpty(), info.duration * 1000),
         )
     }
 
@@ -371,6 +374,7 @@ class NewPipeMediaExtractor(
         likeCount = likeCount,
         date = textualUploadDate,
         replyCount = replyCount,
+        replies = replies,
     )
 
     /** Channel pages are read once and reused for their tabs (a channel's tab links come from its page). */
@@ -451,6 +455,8 @@ class NewPipeMediaExtractor(
             uploadDate = textualUploadDate,
             isLive = streamType == StreamType.LIVE_STREAM || streamType == StreamType.AUDIO_LIVE_STREAM,
             isShort = isShortFormContent,
+            publishedAt = runCatching { uploadDate?.offsetDateTime()?.toInstant()?.toEpochMilli() }.getOrNull()
+                ?: com.edureminder.quicktube.core.common.Format.publishedAt(textualUploadDate),
         )
         is ChannelInfoItem -> MediaItem(
             url = url, title = name, thumbnail = thumbnails.best(), kind = ItemKind.CHANNEL,

@@ -4,4 +4,5 @@ plugins {
 
 dependencies {
     implementation(projects.core.update)
+    implementation(projects.core.playerui)
 }

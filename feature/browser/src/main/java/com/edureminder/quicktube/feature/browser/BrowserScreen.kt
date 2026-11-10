@@ -237,6 +237,7 @@ fun BrowserScreen(
     // Pages whose address names one video that a native reader can read by itself (Dailymotion covers its
     // player with a sign-up wall in the WebView, so nothing ever plays there; Bilibili's player waits for a tap).
     val isNative = YT_WATCH.containsMatchIn(ui.url) || com.edureminder.quicktube.core.extractor.DailymotionReader.videoId(ui.url) != null ||
+        com.edureminder.quicktube.core.extractor.VimeoReader.videoId(ui.url) != null ||
         com.edureminder.quicktube.core.extractor.BilibiliReader.videoId(ui.url) != null
     // Only when the user is on a video and it is playing — never on listing/home pages.
     // Instagram posts offer their photos too, so the button shows before (or without) any video playing.

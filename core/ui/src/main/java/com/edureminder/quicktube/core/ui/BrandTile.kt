@@ -37,6 +37,8 @@ fun brandFor(nameOrUrl: String): BrandSpec? {
         "whatsapp" in k || "status" in k -> BrandSpec(BrandIcons.WhatsApp, SolidColor(Color(0xFF25D366)))
         "dailymotion" in k -> BrandSpec(BrandIcons.Dailymotion, SolidColor(Color(0xFF0A0A0A)))
         "vimeo" in k -> BrandSpec(BrandIcons.Vimeo, SolidColor(Color(0xFF17D5FF)))
+        // Bilibili's blue with its initial (no mark of its own here).
+        "bilibili" in k || "b23.tv" in k -> BrandSpec(null, SolidColor(Color(0xFF00A1D6)))
         "soundcloud" in k -> BrandSpec(BrandIcons.SoundCloud, Brush.linearGradient(listOf(Color(0xFFFF8800), Color(0xFFFF3300))))
         else -> null
     }
@@ -54,7 +56,7 @@ fun BrandTile(nameOrUrl: String, modifier: Modifier = Modifier, size: Dp = 52.dp
     ) {
         if (spec?.icon != null) Icon(spec.icon, null, tint = spec.tint, modifier = Modifier.size(size * 0.5f))
         else Text(
-            label.trim().take(1).uppercase(), color = MaterialTheme.colorScheme.onPrimaryContainer,
+            label.trim().take(1).uppercase(), color = spec?.tint ?: MaterialTheme.colorScheme.onPrimaryContainer,
             style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.ExtraBold,
         )
     }

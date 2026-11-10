@@ -222,7 +222,7 @@ private fun NewBulk(initialText: String, initialName: String, downloadDir: Strin
                 BatchQuality.entries.forEach { q -> QtChip(q.label, quality == q, { quality = q }) }
             }
             val folder = name.trim().takeIf { it.isNotEmpty() }?.let { Urls.safeFileName(it, 80) } ?: "Bulk (today's date)"
-            Text("Saved in ${downloadDir.substringAfter("/0/", "").ifBlank { "Download/QuickTube" }}/$folder · links already downloaded are skipped",
+            Text("Saved in ${downloadDir.split('/').drop(if (downloadDir.startsWith("/storage/emulated/")) 4 else 3).joinToString("/").ifBlank { "Download/QuickTube" }}/$folder · links already downloaded are skipped",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 12.dp))
             PillButton(
                 if (links.isEmpty()) "Add links to start" else "Download ${links.size} " + if (links.size == 1) "link" else "links",
@@ -264,6 +264,8 @@ private fun platformIcon(p: Platform): ImageVector = when (p) {
     Platform.TIKTOK -> com.edureminder.quicktube.core.designsystem.icon.BrandIcons.TikTok
     Platform.TWITTER -> com.edureminder.quicktube.core.designsystem.icon.BrandIcons.X
     Platform.SOUNDCLOUD -> com.edureminder.quicktube.core.designsystem.icon.BrandIcons.SoundCloud
+    Platform.DAILYMOTION -> com.edureminder.quicktube.core.designsystem.icon.BrandIcons.Dailymotion
+    Platform.VIMEO -> com.edureminder.quicktube.core.designsystem.icon.BrandIcons.Vimeo
     else -> QtIcons.Public
 }
 

@@ -297,10 +297,20 @@ private fun compactProgress(done: Long, total: Long?): String {
 fun statusText(task: DownloadTask, speed: Long): String = when (task.status) {
     DownloadStatus.RUNNING -> Format.speed(speed) + " · " +
         compactProgress(task.downloadedBytes + task.audioDownloadedBytes, task.totalBytes.takeIf { it > 0 }?.plus(task.audioTotalBytes.coerceAtLeast(0)))
-    DownloadStatus.QUEUED -> "Waiting…"
+    // "Download later" ones say when.
+    DownloadStatus.QUEUED -> when {
+        task.startAfter > System.currentTimeMillis() -> "Scheduled · " +
+            java.text.DateFormat.getTimeInstance(java.text.DateFormat.SHORT).format(java.util.Date(task.startAfter)) + if (task.wifiOnly) " on Wi-Fi" else ""
+        task.wifiOnly -> "Waiting for Wi-Fi"
+        else -> "Waiting…"
+    }
     DownloadStatus.PAUSED -> "Paused"
     DownloadStatus.WAITING_NETWORK -> "Waiting for network"
-    DownloadStatus.MERGING -> if (task.filePath.endsWith(".mp3", ignoreCase = true)) "Converting to MP3…" else "Processing video…"
+    DownloadStatus.MERGING -> when (task.filePath.substringAfterLast('.').lowercase()) {
+        "mp3" -> "Converting to MP3…"
+        "flac", "wav", "aac", "opus" -> "Converting audio…"
+        else -> "Processing video…"
+    }
     DownloadStatus.FAILED -> com.edureminder.quicktube.core.common.DownloadErrors.friendly(task.error)
     DownloadStatus.COMPLETED -> "Completed"
 }

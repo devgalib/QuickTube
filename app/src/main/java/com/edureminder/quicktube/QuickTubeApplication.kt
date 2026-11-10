@@ -53,6 +53,13 @@ class QuickTubeApplication : Application(), SingletonImageLoader.Factory {
             // Files already in the download folder (e.g. after a reinstall) show up in the library again.
             library.importFolder(get<SettingsRepository>().current().downloadDir)
         }
+        // New-video alerts for followed channels: scheduled while the setting is on and something is followed.
+        appScope.launch {
+            kotlinx.coroutines.flow.combine(
+                get<SettingsRepository>().settings.map { it.notifyRecommended },
+                get<com.edureminder.quicktube.core.data.SubscriptionRepository>().subscriptions.map { it.isNotEmpty() },
+            ) { on, any -> on && any }.distinctUntilChanged().collect { com.edureminder.quicktube.work.NewVideosJob.schedule(this@QuickTubeApplication, it) }
+        }
         // Bulk downloads left unfinished when the app was closed carry on.
         appScope.launch { get<com.edureminder.quicktube.core.downloadsheet.BulkDownloader>() }
         appScope.launch {

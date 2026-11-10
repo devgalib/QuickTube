@@ -5,6 +5,13 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
+import com.edureminder.quicktube.core.designsystem.rememberHideOnScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -161,9 +168,16 @@ private val filters = listOf(
     SearchFilter.CHANNELS to "Channels", SearchFilter.PLAYLISTS to "Playlists",
 )
 
-/** The YouTube tab: a search field on top of [feed] (trending), which search results replace. */
+/**
+ * The YouTube tab: a search field and chips (the feed's subjects, or the search filters) over [feed] (trending), which
+ * search results replace. The header slides away while scrolling down the list and comes back on a small scroll up.
+ */
 @Composable
-internal fun YouTubeTab(actions: HomeActions, onDownload: (MediaItem) -> Unit, feed: @Composable () -> Unit) {
+internal fun YouTubeTab(
+    actions: HomeActions, onDownload: (MediaItem) -> Unit,
+    feedChips: @Composable () -> Unit,
+    feed: @Composable (top: Dp) -> Unit,
+) {
     val vm = koinViewModel<YouTubeSearchViewModel>()
     val ui by vm.ui.collectAsStateWithLifecycle()
     val typed by vm.typed.collectAsStateWithLifecycle()
@@ -176,28 +190,47 @@ internal fun YouTubeTab(actions: HomeActions, onDownload: (MediaItem) -> Unit, f
     androidx.activity.compose.BackHandler(focused || ui.query != null) {
         if (focused) focus.clearFocus() else vm.clear()
     }
+    val mode = when { focused -> 0; ui.query != null -> 1; else -> 2 }
+    val header = rememberHideOnScroll()
+    // A new page (typing, results, back to the feed) starts with the header showing.
+    LaunchedEffect(mode, ui.query, ui.filter) { header.show() }
+    val density = LocalDensity.current
+    val top = with(density) { header.height.toDp() }
 
-    Column(Modifier.fillMaxSize()) {
-        SearchField(
-            text = typed, onText = { vm.typed.value = it }, onSubmit = { submit(typed) },
-            onClear = { if (typed.isNotEmpty() && focused) vm.typed.value = "" else { vm.clear(); focus.clearFocus() } },
-            showClear = typed.isNotEmpty() || ui.query != null,
-            onFocus = { focused = it },
-            onHistory = actions.openWatchHistory,
-            onPlaylists = { actions.openPlaylists(false) },
-        )
+    Box(Modifier.fillMaxSize().clipToBounds().then(if (mode == 0) Modifier else Modifier.nestedScroll(header.connection))) {
         AnimatedContent(
-            targetState = when { focused -> 0; ui.query != null -> 1; else -> 2 },
+            targetState = mode,
             transitionSpec = { fadeIn() togetherWith fadeOut() }, label = "yt-search",
-        ) { mode ->
-            when (mode) {
+        ) { m ->
+            when (m) {
                 0 -> SuggestionList(
                     items = if (typed.isBlank()) recent.take(12) else suggestions,
-                    isRecent = typed.isBlank(),
+                    isRecent = typed.isBlank(), top = top,
                     onPick = submit, onFill = { vm.typed.value = it }, onForget = { vm.forget(it) },
                 )
-                1 -> Results(ui, actions, onDownload, onFilter = vm::setFilter, onMore = vm::loadMore, onRetry = { vm.search(ui.query!!) })
-                else -> feed()
+                1 -> Results(ui, actions, onDownload, top = top, onMore = vm::loadMore, onRetry = { vm.search(ui.query!!) })
+                else -> feed(top)
+            }
+        }
+        Column(
+            Modifier.fillMaxWidth().onSizeChanged { header.height = it.height }
+                .graphicsLayer { translationY = header.offset }
+                .background(MaterialTheme.colorScheme.background),
+        ) {
+            SearchField(
+                text = typed, onText = { vm.typed.value = it }, onSubmit = { submit(typed) },
+                onClear = { if (typed.isNotEmpty() && focused) vm.typed.value = "" else { vm.clear(); focus.clearFocus() } },
+                showClear = typed.isNotEmpty() || ui.query != null,
+                onFocus = { focused = it },
+                onHistory = actions.openWatchHistory,
+                onPlaylists = { actions.openPlaylists(false) },
+                onSubscriptions = actions.openSubscriptions,
+            )
+            when (mode) {
+                1 -> LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(filters) { (f, label) -> QtChip(label, ui.filter == f, { vm.setFilter(f) }) }
+                }
+                2 -> feedChips()
             }
         }
     }
@@ -208,6 +241,7 @@ private fun SearchField(
     text: String, onText: (String) -> Unit, onSubmit: () -> Unit, onClear: () -> Unit, showClear: Boolean, onFocus: (Boolean) -> Unit,
     onHistory: () -> Unit,
     onPlaylists: () -> Unit,
+    onSubscriptions: () -> Unit,
 ) {
     val cs = MaterialTheme.colorScheme
     val requester = remember { FocusRequester() }
@@ -233,6 +267,11 @@ private fun SearchField(
             Modifier.size(40.dp).clip(RoundedCornerShape(20.dp)).pressable(scaleDown = 0.85f, onClick = onClear),
             contentAlignment = Alignment.Center,
         ) { Icon(QtIcons.Close, "Clear", tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
+        // Channels followed here and their new videos.
+        if (!showClear) Box(
+            Modifier.size(40.dp).clip(RoundedCornerShape(20.dp)).pressable(scaleDown = 0.85f, onClick = onSubscriptions),
+            contentAlignment = Alignment.Center,
+        ) { Icon(QtIcons.Subscriptions, "Subscriptions", tint = cs.onSurfaceVariant, modifier = Modifier.size(20.dp)) }
         // Video playlists made here, then watch history (what was watched here, and where it was left).
         if (!showClear) Box(
             Modifier.size(40.dp).clip(RoundedCornerShape(20.dp)).pressable(scaleDown = 0.85f, onClick = onPlaylists),
@@ -246,9 +285,9 @@ private fun SearchField(
 }
 
 @Composable
-private fun SuggestionList(items: List<String>, isRecent: Boolean, onPick: (String) -> Unit, onFill: (String) -> Unit, onForget: (String) -> Unit) {
+private fun SuggestionList(items: List<String>, isRecent: Boolean, top: Dp, onPick: (String) -> Unit, onFill: (String) -> Unit, onForget: (String) -> Unit) {
     val cs = MaterialTheme.colorScheme
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + LocalBottomBarHeight.current)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(top = top, bottom = 24.dp + LocalBottomBarHeight.current)) {
         items(items, key = { it }) { s ->
             Row(
                 Modifier.fillMaxWidth().pressable(scaleDown = 0.99f, role = null, onClick = { onPick(s) }).padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
@@ -272,17 +311,15 @@ private fun SuggestionList(items: List<String>, isRecent: Boolean, onPick: (Stri
 @Composable
 private fun Results(
     ui: YtSearchUi, actions: HomeActions, onDownload: (MediaItem) -> Unit,
-    onFilter: (SearchFilter) -> Unit, onMore: () -> Unit, onRetry: () -> Unit,
+    top: Dp, onMore: () -> Unit, onRetry: () -> Unit,
 ) {
+    // The search field and filter chips lie over the top [top] of this.
     Column(Modifier.fillMaxSize()) {
-        LazyRow(contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(filters) { (f, label) -> QtChip(label, ui.filter == f, { onFilter(f) }) }
-        }
         val bottom = 24.dp + LocalBottomBarHeight.current
         when {
-            ui.loading -> FeedSkeleton()
-            ui.error != null -> ErrorBox(ui.error, onRetry)
-            ui.items.isEmpty() -> EmptyBox("No results", "Try different keywords")
+            ui.loading -> Box(Modifier.padding(top = top)) { FeedSkeleton() }
+            ui.error != null -> ErrorBox(ui.error, onRetry, Modifier.fillMaxSize().padding(top = top))
+            ui.items.isEmpty() -> EmptyBox("No results", "Try different keywords", Modifier.fillMaxSize().padding(top = top))
             ui.filter == SearchFilter.SHORTS -> {
                 val grid = rememberLazyGridState()
                 LaunchedEffect(grid) {
@@ -291,7 +328,7 @@ private fun Results(
                 }
                 LazyVerticalGrid(
                     GridCells.Fixed(2), state = grid,
-                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 6.dp, bottom = bottom),
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = top + 6.dp, bottom = bottom),
                     horizontalArrangement = Arrangement.spacedBy(10.dp), verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     items(ui.items, key = { it.url }) { ShortTile(it, onClick = { actions.openItem(it) }, onDownload = { onDownload(it) }) }
@@ -301,7 +338,7 @@ private fun Results(
             else -> {
                 val state = rememberLazyListState()
                 state.OnNearEnd { onMore() }
-                LazyColumn(state = state, contentPadding = PaddingValues(top = 6.dp, bottom = bottom)) {
+                LazyColumn(state = state, contentPadding = PaddingValues(top = top + 6.dp, bottom = bottom)) {
                     items(ui.items, key = { it.url }) { item ->
                         Box(Modifier.animateItem()) {
                             if (item.kind == ItemKind.VIDEO) VideoFeedCard(

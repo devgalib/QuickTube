@@ -90,3 +90,24 @@ interface LocalPlaylistDao {
     @Query("SELECT COUNT(*) FROM local_playlist_items WHERE playlistId = :id AND url = :url")
     suspend fun contains(id: Long, url: String): Int
 }
+
+@Dao
+interface SubscriptionDao {
+    @Query("SELECT * FROM subscriptions ORDER BY name COLLATE NOCASE")
+    fun observe(): Flow<List<SubscriptionEntity>>
+
+    @Query("SELECT * FROM subscriptions")
+    suspend fun all(): List<SubscriptionEntity>
+
+    @Query("SELECT COUNT(*) FROM subscriptions WHERE url = :url")
+    fun observeIs(url: String): Flow<Int>
+
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.REPLACE)
+    suspend fun upsert(s: SubscriptionEntity)
+
+    @Query("DELETE FROM subscriptions WHERE url = :url")
+    suspend fun delete(url: String)
+
+    @Query("UPDATE subscriptions SET lastVideo = :video WHERE url = :url")
+    suspend fun setLastVideo(url: String, video: String?)
+}

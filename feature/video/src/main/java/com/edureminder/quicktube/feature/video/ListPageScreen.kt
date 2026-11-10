@@ -99,6 +99,15 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
         Toast.makeText(context, "Adding to downloads…", Toast.LENGTH_SHORT).show()
     }
 
+    val localPlaylists = koinInject<com.edureminder.quicktube.core.data.LocalPlaylistRepository>()
+    val subs = koinInject<com.edureminder.quicktube.core.data.SubscriptionRepository>()
+    val scopeSave = rememberCoroutineScope()
+    /** Plays [list] from [index] on the video page, which then goes on through the rest of it. */
+    fun playFrom(list: List<MediaItem>, index: Int) {
+        com.edureminder.quicktube.core.navigation.VideoQueue.start(ui.header?.title ?: "Playlist", list)
+        onOpen(list[index])
+    }
+
     // Android 10 and older need storage permission before saving into Downloads.
     var pendingQuality by remember { mutableStateOf<Pair<BatchScope, BatchQuality>?>(null) }
     val storageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
@@ -174,12 +183,43 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
                                     else Thumbnail(h.thumbnail, Modifier.fillMaxWidth(.4f).aspectRatio(16f / 9f))
                                     Column(Modifier.padding(start = 16.dp)) {
                                         Text(h.title, style = MaterialTheme.typography.titleMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                                        Text(h.subtitle(), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        // Mixes don't say how many videos they hold: the count loaded so far ("50+") then.
+                                        val count = if (isChannel || h.streamCount >= 0) null
+                                        else "${videos.size}${if (ui.next != null) "+" else ""} videos"
+                                        Text(listOfNotNull(h.subtitle().ifBlank { null }, count).joinToString(" • "),
+                                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        // Follow the channel here (no account): its uploads join Subscriptions and For you.
+                                        if (isChannel) {
+                                            val subscribed by remember(url) { subs.isSubscribed(url) }.collectAsStateWithLifecycle(false)
+                                            PillButton(
+                                                if (subscribed) "Subscribed" else "Subscribe",
+                                                {
+                                                    scopeSave.launch {
+                                                        if (subscribed) subs.unsubscribe(url) else subs.subscribe(h.copy(url = url, kind = ItemKind.CHANNEL))
+                                                    }
+                                                },
+                                                Modifier.padding(top = 8.dp), icon = if (subscribed) QtIcons.Check else QtIcons.Notifications, secondary = subscribed,
+                                            )
+                                        }
                                     }
                                 }
                                 ui.description?.takeIf { it.isNotBlank() && ui.sections.isEmpty() }?.let {
                                     Text(it, maxLines = 3, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall,
                                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+                                }
+                                // A playlist plays in order (or shuffled) on the video page, and can be kept as a playlist of my own.
+                                if (!isChannel && videos.isNotEmpty() && !selecting) Row(
+                                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    PillButton("Play all", { playFrom(videos, 0) }, Modifier.weight(1f), icon = QtIcons.Play)
+                                    PillButton("Shuffle", { playFrom(videos.shuffled(), 0) }, Modifier.weight(1f), icon = QtIcons.Shuffle, secondary = true)
+                                    QtIconButton(QtIcons.PlaylistAdd, "Save to my playlists", {
+                                        scopeSave.launch {
+                                            val r = runCatching { localPlaylists.import(url, isMusic = false) }
+                                            Toast.makeText(context, if (r.isSuccess) "Saved to your playlists" else "Couldn't save this playlist", Toast.LENGTH_SHORT).show()
+                                        }
+                                    }, container = MaterialTheme.colorScheme.surfaceContainerHigh)
                                 }
                                 if (videos.isNotEmpty() && !selecting) Row(
                                     Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
@@ -216,7 +256,10 @@ fun ListPageScreen(url: String, isChannel: Boolean, onBack: () -> Unit, onOpen: 
                                     item,
                                     onClick = {
                                         if (selectable) selected = if (isSelected) selected - item.url else selected + item.url
-                                        else if (!selecting) onOpen(item)
+                                        else if (!selecting) {
+                                            val i = videos.indexOf(item)
+                                            if (!isChannel && i >= 0) playFrom(videos, i) else onOpen(item)
+                                        }
                                     },
                                     onDownload = if (selecting) null else ({ sheet.open(item) }),
                                 )

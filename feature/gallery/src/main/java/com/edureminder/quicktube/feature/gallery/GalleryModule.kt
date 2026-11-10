@@ -6,6 +6,6 @@ import org.koin.core.module.dsl.viewModel
 import org.koin.dsl.module
 
 val galleryModule = module {
-    viewModel { (bucketId: Long) -> GalleryViewModel(bucketId, get()) }
+    viewModel { p -> GalleryViewModel(p.get(), get(), p.getOrNull() ?: false) }
     viewModel { (mediaId: Long) -> GalleryPlayerViewModel(androidApplication(), mediaId, get(), get(), get()) }
 }

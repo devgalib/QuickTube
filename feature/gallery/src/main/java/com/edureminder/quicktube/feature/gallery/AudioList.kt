@@ -41,10 +41,12 @@ fun AudioList(
     onSelection: (Set<Long>?) -> Unit,
     onOpen: (GalleryMedia) -> Unit,
     contentPadding: PaddingValues,
+    header: androidx.compose.foundation.lazy.LazyListScope.() -> Unit = {},
 ) {
     val cs = MaterialTheme.colorScheme
     val haptic = LocalHapticFeedback.current
     LazyColumn(Modifier.fillMaxSize(), contentPadding = contentPadding) {
+        header()
         items(items, key = { it.id }, contentType = { "audio" }) { media ->
             val selected = selection?.contains(media.id)
             Row(

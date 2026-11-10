@@ -37,8 +37,34 @@ class AudioFormatsTest {
     }
 
     @Test
+    fun sizesFromTheVideosLength() {
+        // A 62-second video: MP3 192K ≈ 1.49 MB, WAV ≈ 10.9 MB.
+        val out = withMp3(listOf(audio("x", "m4a", 0, extract = true), video("v")), durationSec = 62)
+        assertEquals(1_488_000L, out.first { it.id == "mp3-x" }.sizeBytes)
+        assertEquals(10_935_250L, out.first { it.id == "wav-x" }.sizeBytes)
+    }
+
+    @Test
     fun nothingAddedWithoutAudioOrWhenMp3Exists() {
         assertEquals(listOf("v"), withMp3(listOf(video("v"))).map { it.id })
         assertEquals(listOf("m", "v"), withMp3(listOf(audio("m", "mp3", 128), video("v"))).map { it.id })
+    }
+}
+
+class DefaultChoiceTest {
+    private fun v(h: Int) = DownloadOption("v$h", FormatKind.VIDEO, "${h}p", "", "mp4", "video/mp4", "https://x/$h", height = h, sizeBytes = h * 1000L)
+    private fun a(id: String, ext: String) = DownloadOption(id, FormatKind.AUDIO, id, "", ext, "audio/$ext", "https://x/$id")
+    private val all = listOf(a("m4a", "m4a"), a("mp3", "mp3"), v(144), v(360), v(720), v(1080), v(2160))
+
+    @org.junit.Test
+    fun followsTheDefaultQualitySetting() {
+        org.junit.Assert.assertEquals("v720", defaultChoice(all)!!.id)
+        org.junit.Assert.assertEquals("v360", defaultChoice(all, "P360")!!.id)
+        org.junit.Assert.assertEquals("v1080", defaultChoice(all, "P1080")!!.id)
+        org.junit.Assert.assertEquals("v2160", defaultChoice(all, "BEST")!!.id)
+        org.junit.Assert.assertEquals("m4a", defaultChoice(all, "AUDIO")!!.id)
+        org.junit.Assert.assertEquals("mp3", defaultChoice(all, "MP3")!!.id)
+        // Asked for 1080p on a 480p-only video: the nearest there is.
+        org.junit.Assert.assertEquals("v360", defaultChoice(listOf(v(144), v(360)), "P1080")!!.id)
     }
 }

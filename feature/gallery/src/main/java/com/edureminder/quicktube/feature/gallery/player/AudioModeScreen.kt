@@ -60,6 +60,8 @@ fun AudioModeScreen(
     onFavorite: () -> Unit,
     onMode: () -> Unit,
     onMore: () -> Unit,
+    /** The queue: see, reorder, remove, add songs. */
+    onQueue: () -> Unit = {},
 ) {
     val position = rememberLivePosition(controller, true)
     Box(Modifier.fillMaxSize().background(Color(0xFF2A2A2E))) {
@@ -86,6 +88,11 @@ fun AudioModeScreen(
             Spacer(Modifier.height(25.dp))
             if (media.isAudio) {
                 if (media.artist.isNotBlank()) Text(media.artist, color = Color.White.copy(alpha = 0.75f), fontSize = 15.sp, modifier = Modifier.padding(horizontal = 22.dp))
+                // What plays next, and the queue to manage it.
+                LazyRow(contentPadding = PaddingValues(horizontal = 22.dp, vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(17.dp)) {
+                    item { Chip(QtIcons.PlaylistPlay, "Queue · ${state.index + 1}/${state.queue.size}", onQueue) }
+                    state.queue.getOrNull(state.index + 1)?.let { n -> item { Chip(QtIcons.PSkipNext, "Next: " + n.title.take(22), controller::next) } }
+                }
             } else LazyRow(contentPadding = PaddingValues(horizontal = 22.dp), horizontalArrangement = Arrangement.spacedBy(17.dp)) {
                 item { Chip(QtIcons.Videocam, "Back", onBackToVideo) }
                 item { Chip(QtIcons.Sync, "Video to MP3", onToMp3) }

@@ -56,7 +56,16 @@ fun DownloadSettingsScreen(onBack: () -> Unit) {
         Column(Modifier.fillMaxSize().padding(pad)) {
             GroupLabel("Storage")
             QtCard {
-                NavRow(QtIcons.Folder, "Download path", s.downloadDir.removePrefix("/storage/emulated/0")) { dialog = "path" }
+                val context = androidx.compose.ui.platform.LocalContext.current
+                NavRow(QtIcons.Folder, "Download path", remember(s.downloadDir) { folderLabel(context, s.downloadDir) }) { dialog = "path" }
+            }
+            GroupLabel("Downloads")
+            QtCard {
+                NavRow(QtIcons.Hd, "Default quality", qualityLabel(s.defaultQuality)) { dialog = "quality" }
+                RowDivider()
+                SwitchRow("Save subtitles", "YouTube videos come with their captions (.srt) when they have them", s.saveSubtitles, QtIcons.Subtitles) { v ->
+                    vm.update { it.copy(saveSubtitles = v) }
+                }
             }
             GroupLabel("Network")
             QtCard {
@@ -71,24 +80,19 @@ fun DownloadSettingsScreen(onBack: () -> Unit) {
         }
     }
     when (dialog) {
-        "path" -> {
-            val options = listOf(
-                vm.defaultDir,
-                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES), "QuickTube").absolutePath,
-                File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC), "QuickTube").absolutePath,
-                File(Environment.getExternalStorageDirectory(), "QuickTube").absolutePath,
-            )
-            AlertDialog(
-                onDismissRequest = { dialog = null },
-                title = { Text("Download path") },
-                text = {
-                    Column {
-                        options.forEach { p -> RadioRow(p.removePrefix("/storage/emulated/0"), s.downloadDir == p) { vm.update { it.copy(downloadDir = p) }; dialog = null } }
-                    }
-                },
-                confirmButton = { TextButton(onClick = { dialog = null }) { Text("Close") } },
-            )
-        }
+        "path" -> FolderPickerDialog(s.downloadDir, onPick = { p -> vm.update { it.copy(downloadDir = p) }; dialog = null }, onDismiss = { dialog = null })
+        "quality" -> AlertDialog(
+            onDismissRequest = { dialog = null },
+            title = { Text("Default quality") },
+            text = {
+                Column {
+                    Text("The format the download sheet starts on. You can still pick another one.", style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(bottom = 8.dp))
+                    qualityChoices.forEach { q -> RadioRow(qualityLabel(q), s.defaultQuality == q) { vm.update { it.copy(defaultQuality = q) }; dialog = null } }
+                }
+            },
+            confirmButton = { TextButton(onClick = { dialog = null }) { Text("Close") } },
+        )
         "tasks" -> {
             var wifi by remember { mutableFloatStateOf(s.maxTasksWifi.toFloat()) }
             var mobile by remember { mutableFloatStateOf(s.maxTasksMobile.toFloat()) }
@@ -127,6 +131,17 @@ fun DownloadSettingsScreen(onBack: () -> Unit) {
     }
 }
 
+private val qualityChoices = listOf("ASK", "P360", "P1080", "BEST", "AUDIO", "MP3")
+
+private fun qualityLabel(q: String) = when (q) {
+    "P360" -> "Fast (360p)"
+    "P1080" -> "Full HD (1080p)"
+    "BEST" -> "Best available (up to 4K)"
+    "AUDIO" -> "Music (M4A)"
+    "MP3" -> "Music (MP3)"
+    else -> "High quality (720p)"
+}
+
 @Composable
 fun NotificationSettingsScreen(onBack: () -> Unit) {
     val vm = koinViewModel<SettingsViewModel>()
@@ -136,15 +151,13 @@ fun NotificationSettingsScreen(onBack: () -> Unit) {
             NotificationPermissionBanner()
             GroupLabel("Download notifications")
             QtCard {
-                SwitchRow("Download progress", "Notify me of download progress", s.notifyProgress, QtIcons.Downloading) { v -> vm.update { it.copy(notifyProgress = v) } }
+                SwitchRow("Download progress", "Show each download's progress (off: one quiet line while downloading)", s.notifyProgress, QtIcons.Downloading) { v -> vm.update { it.copy(notifyProgress = v) } }
                 RowDivider()
                 SwitchRow("Download completed", "Notify me when download is complete", s.notifyCompleted, QtIcons.CheckCircle) { v -> vm.update { it.copy(notifyCompleted = v) } }
             }
-            GroupLabel("Push notifications")
+            GroupLabel("Subscriptions")
             QtCard {
-                SwitchRow("Recommended content", "Notify me of videos and music I might like", s.notifyRecommended, QtIcons.Star) { v -> vm.update { it.copy(notifyRecommended = v) } }
-                RowDivider()
-                SwitchRow("Tool notifications", "Notify me when new tools are released", s.notifyTools, QtIcons.Bolt) { v -> vm.update { it.copy(notifyTools = v) } }
+                SwitchRow("New videos", "Notify me when channels I follow upload (checked a few times a day)", s.notifyRecommended, QtIcons.Notifications) { v -> vm.update { it.copy(notifyRecommended = v) } }
             }
         }
     }

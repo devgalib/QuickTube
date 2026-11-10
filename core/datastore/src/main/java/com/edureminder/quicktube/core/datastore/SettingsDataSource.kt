@@ -56,6 +56,11 @@ class SettingsDataSource(private val context: Context) {
         val gDoubleTap = booleanPreferencesKey("g_double_tap")
         val endMode = stringPreferencesKey("video_end_mode")
         val keepScreenOn = booleanPreferencesKey("keep_screen_on")
+        val autoSubtitles = booleanPreferencesKey("auto_subtitles")
+        val saveSubtitles = booleanPreferencesKey("save_subtitles")
+        val defaultQuality = stringPreferencesKey("default_quality")
+        val sponsorBlock = booleanPreferencesKey("sponsor_block")
+        val pinnedFolders = stringPreferencesKey("pinned_folders")
         val backgroundPlay = booleanPreferencesKey("background_play")
         val autoPip = booleanPreferencesKey("auto_pip")
         val autoplayNext = booleanPreferencesKey("autoplay_next")
@@ -105,6 +110,11 @@ class SettingsDataSource(private val context: Context) {
             p[K.gDoubleTap] = s.gestureDoubleTap
             p[K.endMode] = s.videoEndMode.name
             p[K.keepScreenOn] = s.keepScreenOn
+            p[K.autoSubtitles] = s.autoSubtitles
+            p[K.saveSubtitles] = s.saveSubtitles
+            p[K.defaultQuality] = s.defaultQuality
+            p[K.sponsorBlock] = s.sponsorBlock
+            p[K.pinnedFolders] = s.pinnedFolders.joinToString(",")
             p[K.backgroundPlay] = s.backgroundPlay
             p[K.autoPip] = s.autoPip
             p[K.autoplayNext] = s.autoplayNext
@@ -145,6 +155,11 @@ class SettingsDataSource(private val context: Context) {
         gestureDoubleTap = p[K.gDoubleTap] ?: true,
         videoEndMode = p[K.endMode]?.let { runCatching { VideoEndMode.valueOf(it) }.getOrNull() } ?: VideoEndMode.REPEAT_ONE,
         keepScreenOn = p[K.keepScreenOn] ?: true,
+        autoSubtitles = p[K.autoSubtitles] ?: true,
+        saveSubtitles = p[K.saveSubtitles] ?: true,
+        defaultQuality = p[K.defaultQuality] ?: "ASK",
+        sponsorBlock = p[K.sponsorBlock] ?: true,
+        pinnedFolders = p[K.pinnedFolders]?.split(',')?.mapNotNull { it.toLongOrNull() }.orEmpty(),
         backgroundPlay = p[K.backgroundPlay] ?: false,
         autoPip = p[K.autoPip] ?: true,
         autoplayNext = p[K.autoplayNext] ?: true,

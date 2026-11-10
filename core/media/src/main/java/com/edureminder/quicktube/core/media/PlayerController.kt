@@ -141,6 +141,11 @@ class PlayerController(
         saveCurrentPosition()
         queue = items
         val first = items.getOrNull(startIndex)
+        // Each player sets its own modes after this (the gallery's "repeat the video"): never carry them into the next one.
+        c.repeatMode = Player.REPEAT_MODE_OFF
+        c.shuffleModeEnabled = false
+        PlaybackService.exo?.pauseAtEndOfMediaItems = false
+        if (_sleep.value == SLEEP_STOPPED) _sleep.value = SLEEP_OFF
         c.setMediaItems(items.map { it.toMediaItem() }, startIndex, first?.let(::startPosition) ?: 0)
         c.playbackParameters = PlaybackParameters(prefs.playbackSpeed)
         first?.let { markOpened(it) }
@@ -148,6 +153,49 @@ class PlayerController(
         c.prepare()
         c.play()
         _state.update { it.copy(queue = items, index = startIndex, current = items.getOrNull(startIndex), error = null) }
+    }
+
+    /**
+     * Adds [items] to the playing queue: at the end, or right after the current one ([next]). Nothing playing yet:
+     * they become the queue (paused at the first).
+     */
+    fun addToQueue(items: List<PlayItem>, next: Boolean = false) = withController { c ->
+        if (items.isEmpty()) return@withController
+        if (queue.isEmpty() || c.mediaItemCount == 0) {
+            queue = items
+            c.setMediaItems(items.map { it.toMediaItem() }, 0, 0)
+            c.prepare()
+        } else {
+            val at = if (next) (c.currentMediaItemIndex + 1).coerceAtMost(queue.size) else queue.size
+            queue = queue.subList(0, at) + items + queue.subList(at, queue.size)
+            c.addMediaItems(at, items.map { it.toMediaItem() })
+        }
+        sync(c)
+    }
+
+    /** Takes the [index]th item out of the queue (the playing one too: the next one plays). */
+    fun removeFromQueue(index: Int) = withController { c ->
+        if (index !in queue.indices) return@withController
+        queue = queue.filterIndexed { i, _ -> i != index }
+        c.removeMediaItem(index)
+        sync(c)
+    }
+
+    /** Moves the queue item at [from] to [to]. */
+    fun moveInQueue(from: Int, to: Int) = withController { c ->
+        if (from !in queue.indices || to !in queue.indices || from == to) return@withController
+        queue = queue.toMutableList().apply { add(to, removeAt(from)) }
+        c.moveMediaItem(from, to)
+        sync(c)
+    }
+
+    /** Empties the queue and stops (an empty queue to fill with [addToQueue]). */
+    fun clearQueue() = withController { c ->
+        saveCurrentPosition()
+        queue = emptyList()
+        c.stop()
+        c.clearMediaItems()
+        _state.update { it.copy(queue = emptyList(), index = 0, current = null, isPlaying = false) }
     }
 
     fun togglePlay() = withController { if (it.isPlaying) it.pause() else { if (it.playbackState == Player.STATE_ENDED) it.seekTo(0); it.play() } }
@@ -367,8 +415,39 @@ class PlayerController(
             _player.value?.let { p ->
                 if (p.isPlaying) sync(p)
                 if (p.isPlaying && ++ticks % 20 == 0) saveCurrentPosition()
+                checkSleep(p)
             }
             delay(500)
+        }
+    }
+
+    private val _sleep = MutableStateFlow(SLEEP_OFF)
+
+    /**
+     * The sleep timer, kept here so it goes on when the player's screen is left (mini player, background audio):
+     * [SLEEP_OFF], [SLEEP_END_OF_ITEM], [SLEEP_STOPPED] (it paused at the end; nothing autoplays), or when to pause (epoch ms).
+     */
+    val sleep: StateFlow<Long> = _sleep
+
+    fun setSleep(at: Long) {
+        _sleep.value = at
+        // "End of video": stop when this one ends, wherever the queue or repeat would go next.
+        PlaybackService.exo?.pauseAtEndOfMediaItems = at == SLEEP_END_OF_ITEM
+    }
+
+    private fun checkSleep(p: Player) {
+        val at = _sleep.value
+        when {
+            at > 0 && System.currentTimeMillis() >= at -> { p.pause(); _sleep.value = SLEEP_OFF }
+            at == SLEEP_END_OF_ITEM -> {
+                val atEnd = p.playbackState == Player.STATE_ENDED ||
+                    (!p.isPlaying && p.duration > 0 && p.currentPosition >= p.duration - 600)
+                if (atEnd) {
+                    p.pause()
+                    PlaybackService.exo?.pauseAtEndOfMediaItems = false
+                    _sleep.value = SLEEP_STOPPED
+                }
+            }
         }
     }
 
@@ -394,10 +473,14 @@ class PlayerController(
             .build()
     }
 
-    private companion object {
+    companion object {
+        const val SLEEP_OFF = 0L
+        const val SLEEP_END_OF_ITEM = -1L
+        const val SLEEP_STOPPED = -2L
+
         /** Positions this close to the start aren't worth resuming. */
-        const val RESUME_MIN_MS = 3_000L
-        val UNSUPPORTED = setOf(
+        private const val RESUME_MIN_MS = 3_000L
+        private val UNSUPPORTED = setOf(
             PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED,
             PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED,
             PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES,

@@ -26,6 +26,7 @@ val extractorModule = module {
     single { NewPipeMediaExtractor(get(), Locale.getDefault().language.ifBlank { "en" }, detectCountry(androidContext())) }
     single<MediaExtractor> { get<NewPipeMediaExtractor>() }
     single { WebMediaFinder(get()) }
+    single { SponsorBlockClient(get()) }
     single { HlsClient(get()) }
     single { StreamResolver(get(), get()) }
 }

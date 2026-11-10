@@ -22,7 +22,8 @@ Release secrets live only in GitHub Actions secrets and on the maintainer's mach
 
 - Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) first. Features never depend on other features; shared code goes in `core/*`.
 - Use the design system (`core:designsystem`: `QtIcons`, `pressable()`, `QtCard`, `PillButton`, `LocalBottomBarHeight`…).
-- Analytics: only coarse, anonymous events through the `Analytics` interface. Never log URLs, titles, search terms, site names
-  or file names.
+- Analytics: only coarse, anonymous events through the `Analytics` interface. Never log URLs, titles, search terms or file
+  names. Download events may carry the site's domain only (`DownloadStats.site`, e.g. "tiktok.com"), the country and a short
+  reason code (`DownloadStats.reason` / `findReason`). Download failures are events, never Crashlytics reports.
 - Before pushing: `./gradlew :app:assembleDebug testDebugUnitTest` must pass.
 - On-device tests keep the app installed (`android.injected.androidTest.leaveApksInstalledAfterRun=true`) so user data isn't wiped.

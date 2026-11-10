@@ -37,5 +37,20 @@ object Format {
     private fun trim(v: Double) =
         if (v >= 100) v.toLong().toString() else String.format(Locale.US, "%.1f", v).removeSuffix(".0")
 
-    fun views(n: Long) = if (n < 0) "" else "${count(n)} views"
+    /** "1.2M views"; for a live stream its viewers right now ("8.7K watching"). */
+    fun views(n: Long, live: Boolean = false) = if (n < 0) "" else "${count(n)} ${if (live) "watching" else "views"}"
+
+    /**
+     * "3 days ago" / "Streamed 2 hours ago" / "1 year ago" → about when (epoch ms, [now] by default); 0 when it
+     * isn't such a text. Close enough to put uploads in order.
+     */
+    fun publishedAt(text: String?, now: Long = System.currentTimeMillis()): Long {
+        val m = Regex("""(\d+)\s*(second|minute|hour|day|week|month|year)s?\s+ago""", RegexOption.IGNORE_CASE).find(text ?: return 0) ?: return 0
+        val n = m.groupValues[1].toLong()
+        val unit = when (m.groupValues[2].lowercase()) {
+            "second" -> 1_000L; "minute" -> 60_000L; "hour" -> 3_600_000L; "day" -> 86_400_000L
+            "week" -> 7 * 86_400_000L; "month" -> 30 * 86_400_000L; else -> 365 * 86_400_000L
+        }
+        return now - n * unit
+    }
 }

@@ -13,8 +13,9 @@ import org.koin.dsl.module
         DownloadEntity::class, SiteEntity::class, HistoryEntity::class, BookmarkEntity::class, SearchQueryEntity::class,
         DeletedHistoryEntity::class, PlayHistoryEntity::class, SavedVideoEntity::class,
         BulkJobEntity::class, BulkItemEntity::class, LocalPlaylistEntity::class, LocalPlaylistItemEntity::class,
+        SubscriptionEntity::class,
     ],
-    version = 9,
+    version = 10,
     exportSchema = false,
 )
 abstract class QuickTubeDatabase : RoomDatabase() {
@@ -28,6 +29,7 @@ abstract class QuickTubeDatabase : RoomDatabase() {
     abstract fun savedVideoDao(): SavedVideoDao
     abstract fun bulkDao(): BulkDao
     abstract fun localPlaylistDao(): LocalPlaylistDao
+    abstract fun subscriptionDao(): SubscriptionDao
 }
 
 /** v2: downloads can be HLS playlists. */
@@ -112,16 +114,28 @@ val MIGRATION_8_9 = object : Migration(8, 9) {
     }
 }
 
+val MIGRATION_9_10 = object : Migration(9, 10) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `subscriptions` (`url` TEXT NOT NULL, `name` TEXT NOT NULL, `avatar` TEXT, " +
+                "`subscribedAt` INTEGER NOT NULL, `lastVideo` TEXT, PRIMARY KEY(`url`))",
+        )
+        db.execSQL("ALTER TABLE downloads ADD COLUMN startAfter INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("ALTER TABLE downloads ADD COLUMN wifiOnly INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
 val databaseModule = module {
     single {
         Room.databaseBuilder(androidContext(), QuickTubeDatabase::class.java, "quicktube.db")
-            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9)
+            .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10)
             .fallbackToDestructiveMigrationOnDowngrade(true)
             .build()
     }
     single { get<QuickTubeDatabase>().downloadDao() }
     single { get<QuickTubeDatabase>().bulkDao() }
     single { get<QuickTubeDatabase>().localPlaylistDao() }
+    single { get<QuickTubeDatabase>().subscriptionDao() }
     single { get<QuickTubeDatabase>().siteDao() }
     single { get<QuickTubeDatabase>().historyDao() }
     single { get<QuickTubeDatabase>().bookmarkDao() }

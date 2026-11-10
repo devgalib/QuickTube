@@ -26,7 +26,9 @@ internal class BrowserRepositoryImpl(
     private val siteDao: SiteDao,
     private val historyDao: HistoryDao,
     private val bookmarkDao: BookmarkDao,
+    context: android.content.Context,
 ) : BrowserRepository {
+    private val prefs = context.getSharedPreferences("sites", android.content.Context.MODE_PRIVATE)
     override val sites = siteDao.observe()
         .onStart {
             if (siteDao.count() == 0) siteDao.insertAll(DEFAULT_SITES)
@@ -35,6 +37,11 @@ internal class BrowserRepositoryImpl(
             else if (siteDao.countUrlOrName(YOUTUBE_URL, YOUTUBE_WEB) == 0) {
                 siteDao.renameBuiltIn(YOUTUBE_WEB_URL, YOUTUBE_WEB)
                 siteDao.insert(DEFAULT_SITES.first { it.url == YOUTUBE_URL })
+            }
+            // Sites added to the defaults later appear once in lists made before them (not again if deleted).
+            if (!prefs.getBoolean("site_bilibili", false)) {
+                if (siteDao.countUrlOrName(BILIBILI_URL, "Bilibili") == 0 && siteDao.count() > 0) siteDao.insert(DEFAULT_SITES.first { it.url == BILIBILI_URL })
+                prefs.edit().putBoolean("site_bilibili", true).apply()
             }
         }
         .map { list -> list.map { it.asModel() } }
@@ -85,7 +92,9 @@ internal class BrowserRepositoryImpl(
             SiteEntity(name = "Dailymotion", url = "https://www.dailymotion.com/", builtIn = true, position = 6),
             SiteEntity(name = "Vimeo", url = "https://vimeo.com/", builtIn = true, position = 7),
             SiteEntity(name = "SoundCloud", url = "https://m.soundcloud.com/", builtIn = true, position = 8),
+            SiteEntity(name = "Bilibili", url = BILIBILI_URL, builtIn = true, position = 9),
         )
+        private const val BILIBILI_URL = "https://m.bilibili.com/"
     }
 }
 

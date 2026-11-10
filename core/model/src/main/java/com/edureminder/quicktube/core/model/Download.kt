@@ -45,6 +45,10 @@ data class DownloadTask(
     /** A cut of the video: only [clipStartMs] to [clipEndMs] is downloaded. 0 / 0 = the whole video. */
     val clipStartMs: Long = 0,
     val clipEndMs: Long = 0,
+    /** "Download later": not before this time (epoch ms), 0 = now. */
+    val startAfter: Long = 0,
+    /** Waits for Wi-Fi. */
+    val wifiOnly: Boolean = false,
 ) {
     val isClip get() = clipEndMs > clipStartMs
     val progress: Float
@@ -78,7 +82,34 @@ data class DownloadRequest(
     val images: List<String> = emptyList(),
     /** A folder inside the download folder (a bulk download's name); null = the download folder itself. */
     val folder: String? = null,
+    /** "Download later": not before this time (epoch ms), 0 = now. */
+    val startAfter: Long = 0,
+    /** Waits for Wi-Fi even when mobile data is allowed. */
+    val wifiOnly: Boolean = false,
 )
+
+/** When a download sheet's "Later" choice starts the download. */
+object DownloadLater {
+    /** The next 1:00 AM after [now] (local time). */
+    fun tonight(now: Long = System.currentTimeMillis(), zone: java.util.TimeZone = java.util.TimeZone.getDefault()): Long =
+        java.util.Calendar.getInstance(zone).apply {
+            timeInMillis = now
+            set(java.util.Calendar.HOUR_OF_DAY, 1); set(java.util.Calendar.MINUTE, 0); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+            if (timeInMillis <= now) add(java.util.Calendar.DAY_OF_YEAR, 1)
+        }.timeInMillis
+
+    /** The next [hour]:[minute] after [now]. */
+    fun at(hour: Int, minute: Int, now: Long = System.currentTimeMillis(), zone: java.util.TimeZone = java.util.TimeZone.getDefault()): Long =
+        java.util.Calendar.getInstance(zone).apply {
+            timeInMillis = now
+            set(java.util.Calendar.HOUR_OF_DAY, hour); set(java.util.Calendar.MINUTE, minute); set(java.util.Calendar.SECOND, 0); set(java.util.Calendar.MILLISECOND, 0)
+            if (timeInMillis <= now) add(java.util.Calendar.DAY_OF_YEAR, 1)
+        }.timeInMillis
+
+    /** True while [task] has to wait (its time hasn't come, or it wants Wi-Fi and the phone isn't on Wi-Fi). */
+    fun waiting(startAfter: Long, wifiOnly: Boolean, onWifi: Boolean, now: Long = System.currentTimeMillis()) =
+        startAfter > now || (wifiOnly && !onWifi)
+}
 
 /** A download the user deleted permanently; kept so it can be downloaded again. */
 data class DeletedDownload(

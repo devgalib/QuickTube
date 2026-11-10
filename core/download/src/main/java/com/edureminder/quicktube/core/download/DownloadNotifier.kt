@@ -62,15 +62,28 @@ internal class DownloadNotifier(
         scope.launch {
             val running = dao.byStatus(listOf(DownloadStatus.RUNNING, DownloadStatus.MERGING, DownloadStatus.QUEUED))
             if (running.isEmpty() && !hasWork) {
+                minimalShown = false
                 // Never stopService(): a stop that lands before the service went foreground crashes the app.
                 if (serviceRunning) DownloadService.requestStop()
                 serviceRunning = false
                 nm.cancel(ID_PROGRESS)
                 return@launch
             }
-            if (canPost()) nm.notify(ID_PROGRESS, progressNotification(running))
+            if (!canPost()) return@launch
+            // "Download progress" off: Android still needs a notification while downloads run, so it's one quiet line.
+            if (settings.current().notifyProgress) nm.notify(ID_PROGRESS, progressNotification(running))
+            else if (!minimalShown) { nm.notify(ID_PROGRESS, minimalNotification()); minimalShown = true }
         }
     }
+
+    @Volatile private var minimalShown = false
+
+    private fun minimalNotification() = NotificationCompat.Builder(context, CH_PROGRESS)
+        .setSmallIcon(android.R.drawable.stat_sys_download)
+        .setContentTitle("QuickTube is downloading")
+        .setOngoing(true).setOnlyAlertOnce(true).setSilent(true)
+        .setContentIntent(openApp("downloads"))
+        .build()
 
     fun progressNotification(running: List<DownloadEntity>): android.app.Notification {
         val first = running.firstOrNull()

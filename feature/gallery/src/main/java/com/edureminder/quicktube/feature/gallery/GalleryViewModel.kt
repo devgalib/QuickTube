@@ -21,6 +21,10 @@ data class GalleryUi(
     val items: List<GalleryMedia> = emptyList(),
     val entries: List<GridEntry> = emptyList(),
     val albums: List<GalleryAlbum> = emptyList(),
+    /** The Audios tab: every folder with audio files. */
+    val audioFolders: List<GalleryAlbum> = emptyList(),
+    /** Every audio file (for "Play all", "Shuffle" and the custom-queue picker). */
+    val audios: List<GalleryMedia> = emptyList(),
 )
 
 /** One per gallery screen: the Photos tab ([GALLERY_ALL]), a virtual album or one folder ([bucketId]). Sections are built off the main thread. */
@@ -28,17 +32,21 @@ data class GalleryUi(
 class GalleryViewModel(
     private val bucketId: Long,
     private val repo: GalleryRepository,
+    /** An audio folder ([bucketId] is the folder): its songs only. */
+    private val audio: Boolean = false,
 ) : ViewModel() {
 
     val ui: StateFlow<GalleryUi> = repo.library.filterNotNull()
         .mapLatest { lib ->
-            val items = GallerySections.filter(lib.items, bucketId)
+            val items = GallerySections.filter(lib.items, bucketId, audio)
             GalleryUi(
                 loaded = true,
                 complete = lib.complete,
                 items = items,
                 entries = GallerySections.build(items),
                 albums = if (bucketId == GALLERY_ALL) GallerySections.virtualAlbums(lib.items) + GallerySections.albums(items) else emptyList(),
+                audioFolders = if (bucketId == GALLERY_ALL && !audio) GallerySections.audioFolders(lib.items) else emptyList(),
+                audios = if (bucketId == GALLERY_ALL && !audio) lib.items.filter { it.isAudio } else emptyList(),
             )
         }
         .flowOn(Dispatchers.Default)

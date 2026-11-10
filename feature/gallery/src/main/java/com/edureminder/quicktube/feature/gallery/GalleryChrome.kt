@@ -133,37 +133,6 @@ fun selectedLabel(n: Int) = when (n) {
     else -> "$n items selected"
 }
 
-/**
- * Selection actions in the floating bar's place and shape. Delete goes through the system's trash dialog on
- * Android 11+, so it is undoable from the phone's own gallery for 30 days.
- */
-@Composable
-fun SelectionBar(
-    selected: List<GalleryMedia>,
-    allSelected: Boolean,
-    onSelectAll: () -> Unit,
-    onDone: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val context = LocalContext.current
-    val cs = MaterialTheme.colorScheme
-    val delete = rememberDeleteAction(onDone)
-    val shape = RoundedCornerShape(28.dp)
-    Box(modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 24.dp, vertical = 10.dp), contentAlignment = Alignment.Center) {
-        Row(
-            Modifier.widthIn(max = 440.dp).fillMaxWidth().height(68.dp)
-                .shadow(6.dp, shape, ambientColor = Color.Black.copy(alpha = 0.4f), spotColor = Color.Black.copy(alpha = 0.4f))
-                .clip(shape).background(cs.surfaceContainerHigh).border(1.dp, cs.outlineVariant.copy(alpha = 0.7f), shape)
-                .padding(horizontal = 8.dp),
-        ) {
-            val enabled = selected.isNotEmpty()
-            BarAction(QtIcons.Share, "Share", enabled) { GalleryActions.share(context, selected) }
-            BarAction(QtIcons.SelectAll, if (allSelected) "Clear" else "Select all", true, onClick = onSelectAll)
-            BarAction(QtIcons.Delete, "Delete", enabled) { delete(selected) }
-        }
-    }
-}
-
 @Composable
 fun androidx.compose.foundation.layout.RowScope.BarAction(
     icon: ImageVector, label: String, enabled: Boolean, tint: Color = MaterialTheme.colorScheme.onSurface, onClick: () -> Unit,

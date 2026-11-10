@@ -77,6 +77,26 @@ class DownloadSheetViewModel(
 
     private val sizeChecked = mutableSetOf<String>()
 
+    /** The target whose "no video here" was already counted (each link once). */
+    private var reportedFor: SheetTarget? = null
+
+    init {
+        // Links that gave no video, by site and reason, so the sites that fail most can be fixed first.
+        viewModelScope.launch {
+            _ui.collect { s ->
+                val t = loadedFor ?: return@collect
+                if (s.loading || s.error == null || s.options.isNotEmpty() || s.isLive || reportedFor == t) return@collect
+                reportedFor = t
+                analytics.event(com.edureminder.quicktube.core.analytics.Events.DOWNLOAD_FAILED, mapOf(
+                    "stage" to "find",
+                    "reason" to com.edureminder.quicktube.core.common.DownloadStats.findReason(s.error),
+                    "site" to (com.edureminder.quicktube.core.common.DownloadStats.site(s.pageUrl) ?: "unknown"),
+                    "platform" to com.edureminder.quicktube.core.common.Urls.platformOf(s.pageUrl).name.lowercase(),
+                ))
+            }
+        }
+    }
+
     private fun remoteSize(url: String, headers: Map<String, String>): Long = runCatching {
         val req = okhttp3.Request.Builder().url(url).header("Range", "bytes=0-0")
             .apply { headers.forEach { (k, v) -> header(k, v) } }.build()
@@ -188,7 +208,8 @@ class DownloadSheetViewModel(
     }
 
     /** [clip]: only this part of the video (ms), or null for all of it. */
-    fun download(option: DownloadOption, clip: LongRange? = null) {
+    /** [startAfter] / [wifiOnly]: "Download later" (0 / false = now). */
+    fun download(option: DownloadOption, clip: LongRange? = null, startAfter: Long = 0, wifiOnly: Boolean = false) {
         val s = _ui.value
         analytics.event(
             com.edureminder.quicktube.core.analytics.Events.DOWNLOAD_STARTED,
@@ -196,7 +217,7 @@ class DownloadSheetViewModel(
         )
         // Not viewModelScope: the share sheet's activity finishes the moment a format is tapped, which would
         // cancel the request before it's saved.
-        val request = option.toRequest(s.title, s.pageUrl, s.thumbnail, s.durationSec, s.headers)
+        val request = option.toRequest(s.title, s.pageUrl, s.thumbnail, s.durationSec, s.headers).copy(startAfter = startAfter, wifiOnly = wifiOnly)
         downloads.submit(if (clip == null) request else clipRequest(request, option, clip, s.durationSec))
     }
 }

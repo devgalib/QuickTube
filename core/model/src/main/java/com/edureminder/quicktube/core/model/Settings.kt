@@ -50,6 +50,16 @@ data class AppSettings(
     val gestureDoubleTap: Boolean = true,
     val videoEndMode: VideoEndMode = VideoEndMode.REPEAT_ONE,
     val keepScreenOn: Boolean = true,
+    /** Saved subtitle files turn on by themselves in the offline player. */
+    val autoSubtitles: Boolean = true,
+    /** YouTube downloads keep their captions beside the video (.srt). */
+    val saveSubtitles: Boolean = true,
+    /** The format the download sheet starts on: "ASK" (about 720p), "P360", "P720", "P1080", "BEST", "AUDIO", "MP3". */
+    val defaultQuality: String = "ASK",
+    /** Skip sponsor segments, intros and self-promotion in YouTube videos (SponsorBlock, community-made). */
+    val sponsorBlock: Boolean = true,
+    /** Gallery folders pinned to the top of Albums and Audios (bucket ids, most recently pinned first). */
+    val pinnedFolders: List<Long> = emptyList(),
     /** A video's sound keeps playing after leaving the app when it doesn't go to picture-in-picture. */
     val backgroundPlay: Boolean = false,
     /** Leaving a playing video (back or home) keeps it going in a picture-in-picture window. */

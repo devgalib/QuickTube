@@ -195,8 +195,10 @@ fun VSpace(h: Int) = Spacer(Modifier.height(h.dp))
 fun HSpace(w: Int) = Spacer(Modifier.width(w.dp))
 
 /**
- * Height of the floating bottom bar (plus mini player) that tab screens scroll *behind*.
- * Scrolling containers on tab screens add it as bottom content padding so their last item stays reachable.
+ * Space at the bottom that scrolling content must clear: on tab screens the floating bottom bar (plus mini player)
+ * they scroll *behind*, and never less than the phone's navigation bar; on other screens the navigation bar (0 when
+ * the mini player's space already covers it). Edge-to-edge lists add it as bottom content padding so their last item
+ * stays reachable and visible.
  */
 val LocalBottomBarHeight = androidx.compose.runtime.compositionLocalOf { 0.dp }
 

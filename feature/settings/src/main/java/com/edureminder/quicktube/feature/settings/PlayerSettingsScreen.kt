@@ -45,6 +45,7 @@ fun PlayerSettingsScreen(onBack: () -> Unit) {
     val historyCount by vm.historyCount.collectAsStateWithLifecycle()
     var choice by remember { mutableStateOf<Choice<*>?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
+    var captionStyle by remember { mutableStateOf(false) }
     fun set(transform: (AppSettings) -> AppSettings) = vm.update(transform)
 
     Scaffold(topBar = { QtTopBar("Player", onBack) }) { pad ->
@@ -79,6 +80,20 @@ fun PlayerSettingsScreen(onBack: () -> Unit) {
                 }
                 RowDivider()
                 SwitchRow("Keep screen on", "While a video is playing", s.keepScreenOn, QtIcons.LightMode) { v -> set { it.copy(keepScreenOn = v) } }
+                RowDivider()
+                SwitchRow("Show subtitles", "Downloaded videos with subtitle files show them as they start", s.autoSubtitles, QtIcons.Subtitles) { v ->
+                    set { it.copy(autoSubtitles = v) }
+                }
+                RowDivider()
+                NavRow(QtIcons.ClosedCaption, "Caption style", "Size, colour and background of subtitles") { captionStyle = true }
+                RowDivider()
+                SwitchRow("Autoplay next video", "Online videos: play the next suggested video when one ends", s.autoplayNext, QtIcons.PlaylistPlay) { v ->
+                    set { it.copy(autoplayNext = v) }
+                }
+                RowDivider()
+                SwitchRow("Skip sponsors (SponsorBlock)", "YouTube: skip sponsor segments, intros and self-promotion marked by viewers", s.sponsorBlock, QtIcons.FastForward) { v ->
+                    set { it.copy(sponsorBlock = v) }
+                }
                 RowDivider()
                 SwitchRow(
                     "Picture-in-picture", "Leaving a playing video keeps it in a small floating window", s.autoPip, QtIcons.PictureInPicture,
@@ -123,6 +138,7 @@ fun PlayerSettingsScreen(onBack: () -> Unit) {
 
     @Suppress("UNCHECKED_CAST")
     (choice as Choice<Any?>?)?.let { ChoiceDialog(it) { choice = null } }
+    if (captionStyle) com.edureminder.quicktube.core.playerui.CaptionStyleSheet { captionStyle = false }
     if (confirmClear) ConfirmDialog(
         "Clear playback history?", "Videos will start from the beginning again.", "Clear",
         onConfirm = vm::clearPlayHistory, onDismiss = { confirmClear = false },

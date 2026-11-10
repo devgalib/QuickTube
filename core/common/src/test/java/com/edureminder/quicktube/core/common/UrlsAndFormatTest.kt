@@ -38,6 +38,16 @@ class UrlsAndFormatTest {
         assertEquals(Platform.FACEBOOK, Urls.platformOf("https://fb.watch/xyz"))
         assertEquals(Platform.TWITTER, Urls.platformOf("https://x.com/a/status/1"))
         assertEquals(Platform.YOUTUBE, Urls.platformOf("https://youtu.be/abc"))
+        assertEquals(Platform.DAILYMOTION, Urls.platformOf("https://dai.ly/x8abc"))
+        assertEquals(Platform.VIMEO, Urls.platformOf("https://player.vimeo.com/video/1"))
+        assertEquals(Platform.BILIBILI, Urls.platformOf("https://b23.tv/abc"))
+        assertEquals("8.7K watching", Format.views(8_700, live = true))
+        assertEquals("1.2M views", Format.views(1_200_000))
+        assertEquals(1_000_000L - 3 * 3_600_000L, Format.publishedAt("Streamed 3 hours ago", now = 1_000_000L))
+        assertEquals(10L * 86_400_000L - 2 * 7 * 86_400_000L, Format.publishedAt("2 weeks ago", now = 10L * 86_400_000L))
+        assertEquals(0L, Format.publishedAt("Premieres tomorrow"))
+        assertEquals(true, Urls.isMediaFile("https://cdn.x/a/clip.MP4?token=1"))
+        assertEquals(false, Urls.isMediaFile("https://github.com/emonbudc/VidGrab/releases/latest"))
     }
 
     @Test

@@ -25,6 +25,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import com.edureminder.quicktube.feature.gallery.GalleryQueue
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
@@ -81,7 +84,25 @@ class GalleryPlayerViewModel(
 
     init {
         repo.load()
+        // The queue shown is the player's own (it changes from the queue sheet, the Audios tab, the notification).
         viewModelScope.launch {
+            kotlinx.coroutines.flow.combine(
+                controller.state.map { st -> st.queue.map { it.id } }.distinctUntilChanged(),
+                repo.library.filterNotNull(),
+            ) { ids, lib ->
+                val byId = lib.items.associateBy { it.id }
+                ids.mapNotNull { id -> id.removePrefix("gallery:").toLongOrNull()?.let(byId::get) }
+            }.collect { q -> if (q.isNotEmpty() || controller.state.value.queue.isEmpty()) _ui.update { it.copy(queue = q) } }
+        }
+        // Opened for a queue made elsewhere (a custom queue, "Play all" of a folder): it's playing already.
+        // Opened for what's already playing (the mini player, the notification): keep that queue as it is.
+        val alreadyPlaying = controller.state.value.current?.id == "gallery:$mediaId" && controller.state.value.queue.size > 1
+        if (GalleryQueue.takeHandoff(mediaId) || alreadyPlaying) viewModelScope.launch {
+            // A queue of songs plays through (one-song repeat would never get past the first).
+            val mode = settings.current().videoEndMode.toPlayMode().forAudio(controller.state.value.current?.isVideo == false)
+            _ui.update { it.copy(mode = mode) }
+            applyMode(mode)
+        } else viewModelScope.launch {
             var all = repo.library.filterNotNull().first { it.complete }.items
             // A file scanned in just now (a download opened from the library) isn't in the loaded list yet: reload once.
             if (all.none { it.id == mediaId }) {
@@ -97,12 +118,11 @@ class GalleryPlayerViewModel(
             // A window around the tapped video keeps the queue (and the session's binder traffic) small.
             val from = (at - QUEUE / 2).coerceAtLeast(0)
             val queue = videos.subList(from, minOf(videos.size, from + QUEUE)).toList()
-            _ui.update { it.copy(queue = queue) }
             if (queue.isEmpty()) return@launch
             controller.play(queue.map { it.toPlayItem() }, at - from, audioOnly = media.isAudio)
             controller.setVolume(1f)
             // Settings → Player → When a video ends (also changed from the player's own menu).
-            val mode = settings.current().videoEndMode.toPlayMode()
+            val mode = settings.current().videoEndMode.toPlayMode().forAudio(media.isAudio)
             _ui.update { it.copy(mode = mode) }
             applyMode(mode)
             refreshFavorite()
@@ -148,15 +168,16 @@ class GalleryPlayerViewModel(
         controller.setPauseAtEndOfItems(mode == PlayMode.AUTOPLAY_OFF)
     }
 
-    /** Sleep timer: pauses after [minutes]; 0 turns it off. */
+    /** Sleep timer: pauses after [minutes]; 0 turns it off. Runs in the player, so it goes on outside this screen. */
     fun setTimer(minutes: Int) {
-        timerJob?.cancel()
-        if (minutes <= 0) { _ui.update { it.copy(timerMinutes = 0, timerEndsAt = 0) }; return }
+        if (minutes <= 0) { controller.setSleep(PlayerController.SLEEP_OFF); _ui.update { it.copy(timerMinutes = 0, timerEndsAt = 0) }; return }
         val end = System.currentTimeMillis() + minutes * 60_000L
+        controller.setSleep(end)
         _ui.update { it.copy(timerMinutes = minutes, timerEndsAt = end) }
+        timerJob?.cancel()
+        // Only clears the label when the time is up (the pause itself is the controller's).
         timerJob = viewModelScope.launch {
             delay(minutes * 60_000L)
-            controller.pause()
             _ui.update { it.copy(timerMinutes = 0, timerEndsAt = 0) }
         }
     }
@@ -233,6 +254,9 @@ class GalleryPlayerViewModel(
     )
 
     private fun VideoEndMode.toPlayMode() = PlayMode.valueOf(name)
+
+    /** Songs from a folder play one after another: the video setting's "repeat this one" means "repeat the list" for them. */
+    private fun PlayMode.forAudio(audio: Boolean) = if (audio && this == PlayMode.REPEAT_ONE) PlayMode.REPEAT_ALL else this
 
     private companion object {
         const val QUEUE = 100

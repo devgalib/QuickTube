@@ -10,13 +10,17 @@ import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
 /** Firebase Analytics + Crashlytics. Collection is off in debug builds and when the user opts out. */
-internal class FirebaseAnalyticsTracker(context: Context) : Analytics {
+internal class FirebaseAnalyticsTracker(private val context: Context) : Analytics {
     private val analytics = FirebaseAnalytics.getInstance(context)
     private val crashlytics = FirebaseCrashlytics.getInstance()
     private val debuggable = context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
     @Volatile private var enabled = !debuggable
 
-    init { apply() }
+    init {
+        apply()
+        // Lets every report be split by country, even events without a country of their own.
+        runCatching { analytics.setUserProperty("country_code", DeviceCountry.code(context)) }
+    }
 
     private fun apply() {
         analytics.setAnalyticsCollectionEnabled(enabled)
@@ -39,6 +43,8 @@ internal class FirebaseAnalyticsTracker(context: Context) : Analytics {
     override fun event(name: String, params: Map<String, Any?>) {
         if (!enabled) return
         analytics.logEvent(name, Bundle().apply {
+            // Every event can be counted by country.
+            if ("country" !in params) putString("country", DeviceCountry.code(context))
             params.forEach { (k, v) ->
                 when (v) {
                     is Long -> putLong(k, v); is Int -> putLong(k, v.toLong()); is Double -> putDouble(k, v)

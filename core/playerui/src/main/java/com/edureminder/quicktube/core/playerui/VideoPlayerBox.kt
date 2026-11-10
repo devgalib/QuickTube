@@ -135,7 +135,7 @@ fun VideoPlayerBox(
     var sheetOpen by remember { mutableStateOf(false) }
     var captionSheet by remember { mutableStateOf(false) }
     var scrubbing by remember { mutableStateOf(false) }
-    var sleepAt by remember { mutableLongStateOf(0L) }
+    val sleepAt by controller.sleep.collectAsStateWithLifecycle()
     val feedback = remember { GestureFeedback() }
     fun touch() { lastInteraction = System.currentTimeMillis() }
     LaunchedEffect(controlsVisible, lastInteraction, state.isPlaying, sheetOpen, captionSheet, scrubbing) {
@@ -146,10 +146,7 @@ fun VideoPlayerBox(
     }
     // Like YouTube, the end of a video brings the controls back (with Replay in the middle).
     LaunchedEffect(state.ended) { if (state.ended) controlsVisible = true }
-    // Sleep timer from the settings sheet (-1 = end of this video).
-    LaunchedEffect(sleepAt) {
-        if (sleepAt > 0) { delay((sleepAt - System.currentTimeMillis()).coerceAtLeast(0)); controller.pause(); sleepAt = 0 }
-    }
+    // The sleep timer runs in the player controller (it goes on after this screen is left).
     KeepScreenOnWhilePlaying(state.isPlaying && !state.audioOnly && controller.prefs.keepScreenOn)
     // A brightness swipe only lasts while the player is on screen; the rest of the app goes back to the system level.
     val activity = context.findActivity()
@@ -263,14 +260,15 @@ fun VideoPlayerBox(
         }
         GestureOverlays(feedback, state.durationMs, controller.prefs)
         // Sleep timer "End of video" means stop here, not autoplay the next one.
-        if (overlayControls && upNext != null && autoplay == true && state.ended && sleepAt != -1L) UpNextOverlay(upNext, fullscreen)
+        if (overlayControls && upNext != null && autoplay == true && state.ended &&
+            sleepAt != PlayerController.SLEEP_END_OF_ITEM && sleepAt != PlayerController.SLEEP_STOPPED) UpNextOverlay(upNext, fullscreen)
     }
     var styleSheet by remember { mutableStateOf(false) }
     if (captionSheet && captions != null) CaptionSheet(captions, onDismiss = { captionSheet = false; touch() }, onStyle = { captionSheet = false; styleSheet = true })
     if (styleSheet) CaptionStyleSheet { styleSheet = false; touch() }
     if (sheetOpen) YtSettingsSheet(
         state = state, controller = controller, quality = quality, onPip = onPip, extra = options,
-        sleepAt = sleepAt, onSleep = { sleepAt = it },
+        sleepAt = sleepAt.takeUnless { it == PlayerController.SLEEP_STOPPED } ?: 0L, onSleep = controller::setSleep,
         onDismiss = { sheetOpen = false; touch() },
     )
 }

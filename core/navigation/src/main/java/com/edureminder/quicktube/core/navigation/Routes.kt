@@ -17,6 +17,7 @@ import kotlinx.serialization.Serializable
 @Serializable data class PlaylistRoute(val url: String)
 /** YouTube videos and songs watched in the app, with where each was left. */
 @Serializable data object WatchHistoryRoute
+@Serializable data object SubscriptionsRoute
 @Serializable data class BulkRoute(val text: String = "", val name: String = "")
 @Serializable data class LocalPlaylistsRoute(val music: Boolean)
 @Serializable data class LocalPlaylistRoute(val id: Long)
@@ -37,11 +38,15 @@ import kotlinx.serialization.Serializable
 @Serializable data object SavedVideosRoute
 
 // Gallery
-@Serializable data class GalleryAlbumRoute(val bucketId: Long, val name: String)
+@Serializable data class GalleryAlbumRoute(val bucketId: Long, val name: String, val audio: Boolean = false)
+/** Pick songs from any folder: a new queue, or ones to add to the playing queue ([add]). */
+@Serializable data class GalleryAudioPickRoute(val add: Boolean)
 /** Full-screen viewer starting at [mediaId], paging through one album ([bucketId]) or everything ([GALLERY_ALL]). */
 @Serializable data class GalleryViewerRoute(val mediaId: Long, val bucketId: Long = GALLERY_ALL)
 /** The photo editor for one picture. */
 @Serializable data class PhotoEditorRoute(val mediaId: Long)
+/** The collage maker, starting with these photos (comma-separated ids; empty = pick in the maker). */
+@Serializable data class GalleryCollageRoute(val ids: String = "")
 const val GALLERY_ALL = Long.MIN_VALUE
 /** Virtual albums: one kind of media from every folder. They exist only in the gallery, not on disk. */
 const val GALLERY_PHOTOS = Long.MIN_VALUE + 1

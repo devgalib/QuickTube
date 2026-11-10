@@ -80,7 +80,7 @@ fun MediaItem.subtitle(): String = when (kind) {
         if (streamCount >= 0) "$streamCount videos" else "",
     ).filter { it.isNotBlank() }.joinToString(" • ")
     ItemKind.PLAYLIST -> listOf(uploader, if (streamCount >= 0) "$streamCount videos" else "").filter { it.isNotBlank() }.joinToString(" • ")
-    ItemKind.VIDEO -> listOf(uploader, Format.views(viewCount), uploadDate.orEmpty()).filter { it.isNotBlank() }.joinToString(" • ")
+    ItemKind.VIDEO -> listOf(uploader, Format.views(viewCount, isLive), uploadDate.orEmpty()).filter { it.isNotBlank() }.joinToString(" • ")
 }
 
 /** Accent-tinted round download button used on every card. */

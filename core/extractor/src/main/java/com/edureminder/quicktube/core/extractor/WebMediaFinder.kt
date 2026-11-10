@@ -146,13 +146,17 @@ class WebMediaFinder(private val client: OkHttpClient) {
         val json = runCatching { get("https://cdn.syndication.twimg.com/tweet-result?id=$id&lang=en&token=$token", DESKTOP_UA).body }.getOrNull()
             ?: return null
         val o = runCatching { JSONObject(json) }.getOrNull() ?: return null
-        val text = o.optString("text").ifBlank { "X video $id" }
+        // The post's text without the t.co links X appends (they'd end up in the file name).
+        val text = o.optString("text").replace(Regex("""\s*https?://t\.co/\S+"""), "").trim().ifBlank { "X video $id" }
         val details = o.optJSONArray("mediaDetails") ?: return null
         val media = mutableListOf<FoundMedia>()
         var thumb: String? = null
+        var seconds: Double? = null
         for (i in 0 until details.length()) {
             val m = details.getJSONObject(i)
             thumb = thumb ?: m.optString("media_url_https").takeIf { it.isNotBlank() }
+            // The video's length, so audio sizes (MP3…) can be worked out.
+            seconds = seconds ?: m.optJSONObject("video_info")?.optLong("duration_millis")?.takeIf { it > 0 }?.let { it / 1000.0 }
             val variants = m.optJSONObject("video_info")?.optJSONArray("variants") ?: continue
             for (j in 0 until variants.length()) {
                 val v = variants.getJSONObject(j)
@@ -163,7 +167,7 @@ class WebMediaFinder(private val client: OkHttpClient) {
             }
         }
         if (media.isEmpty()) return null
-        return FoundPage(text.take(80), thumb, pageUrl, media.sortedByDescending { it.height })
+        return FoundPage(text.take(80), thumb, pageUrl, media.sortedByDescending { it.height }, durationSec = seconds)
     }
 
     private fun toBase36Token(id: String): String {

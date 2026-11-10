@@ -9,7 +9,7 @@ Builds published on the [Releases page](https://github.com/devgalib/QuickTube/re
 - **Crashlytics**: crash reports (stack trace, device model, Android version, app version) so we can fix crashes.
 - **Analytics**: anonymous usage counts, for example "a download started" (video or audio, HTTP or HLS) or "a screen was opened".
 
-We **never** send the URLs you visit or download, video titles, search terms, file names, site names or anything you type.
+We **never** send the URLs you visit or download, video titles, search terms, file names or anything you type. For downloads we count only the site's domain (for example "tiktok.com"), the country and a short reason code when one fails, so we can see which sites need fixing.
 
 You can turn both off at any time in **Settings → Privacy**. Builds made from source without a Firebase configuration collect nothing.
 

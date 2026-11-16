@@ -26,7 +26,7 @@ media3 = "1.11.1"
 # Prebuilt FFmpeg audio decoders (AC-3, E-AC-3, DTS, TrueHD, WMA…) for Media3, by Jellyfin.
 media3Ffmpeg = "1.9.0+1"
 # FFmpeg video decoders (HEVC 10-bit, H.264 High 10…) for Media3, by Next Player; must match the media3 version.
-nextlib = "1.11.1-0.17.0"
+nextlib = "1.11.1-0.18.0"
 documentfile = "1.1.0"
 webkit = "1.18.0"
 ytdlp = "0.18.1"
